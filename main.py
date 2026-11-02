@@ -1,8 +1,12 @@
 r"""
 Resume Tailor — tailor a master resume to a job description in one Claude call.
 
-SETUP (VS Code terminal, Windows PowerShell)
----------------------------------------------
+This file holds the core logic and a command-line interface. For the web UI
+(including the free copy-paste mode that uses a Claude.ai subscription), run:
+    streamlit run app.py
+
+CLI SETUP (VS Code terminal, Windows PowerShell)
+------------------------------------------------
 1. Create and activate a virtual environment:
        python -m venv .venv
        .\.venv\Scripts\Activate.ps1
@@ -11,21 +15,19 @@ SETUP (VS Code terminal, Windows PowerShell)
 2. Install dependencies:
        pip install -r requirements.txt
 
-3. Set your API key (get one at https://console.anthropic.com/settings/keys):
+3. Set your API key (needs API credits: https://console.anthropic.com/settings/billing):
        Current session only:   $env:ANTHROPIC_API_KEY = "sk-ant-..."
        Permanently (new terminals):  setx ANTHROPIC_API_KEY "sk-ant-..."
    (macOS/Linux: export ANTHROPIC_API_KEY="sk-ant-...")
 
-USAGE
------
+CLI USAGE
+---------
     python main.py
     python main.py --resume master_resume.json --job job_feedback.txt
-    python main.py --resume resume.md --label "Acme Data Engineer"
+    python main.py --resume resume.docx --label "Acme Data Engineer" --template Modern
     python main.py --out-dir "G:\My Drive\Resumes"     # Google Drive for desktop folder
 
-Outputs (in --out-dir, default ./output):
-    <name>_<label>_<date>.docx   tailored resume, ready to upload / open in Google Docs
-    <name>_<label>_<date>.json   same content as JSON (can be reused as a master resume)
+Outputs (in --out-dir, default ./output): <name>_<label>_<date>.pdf / .docx / .json
 """
 
 from __future__ import annotations
@@ -40,10 +42,8 @@ from pathlib import Path
 
 import anthropic
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Pt
+
+import render
 
 # Sonnet is a good cost/quality balance for rewriting bullets. Override with
 # the RESUME_MODEL env var (e.g. "claude-haiku-5-5" for cheapest, "claude-opus-5-5" for best).
@@ -120,13 +120,38 @@ Rules:
 - In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2")."""
 
 
-# --------------------------------------------------------------------------- #
-# Claude call
-# --------------------------------------------------------------------------- #
-
 class TailorError(Exception):
-    """Claude finished without a usable resume (refusal or truncated output)."""
+    """Claude finished without a usable resume (refusal, truncated or unreadable output)."""
 
+
+def _user_content(master_resume: str, job_feedback: str) -> str:
+    return (
+        f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
+        f"<job_description_and_feedback>\n{job_feedback}\n</job_description_and_feedback>\n\n"
+        "Tailor the resume for this job following the rules."
+    )
+
+
+def normalize(value, schema: dict):
+    """Coerce loosely-shaped JSON (e.g. pasted from claude.ai) into the exact schema shape."""
+    kind = schema["type"]
+    if kind == "object":
+        value = value if isinstance(value, dict) else {}
+        return {k: normalize(value.get(k), s) for k, s in schema["properties"].items()}
+    if kind == "array":
+        if isinstance(value, str):
+            value = [value] if value.strip() else []
+        return [normalize(v, schema["items"]) for v in value] if isinstance(value, list) else []
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+# --------------------------------------------------------------------------- #
+# Mode 1: Anthropic API (automatic, needs API credits)
+# --------------------------------------------------------------------------- #
 
 def tailor_resume(
     master_resume: str,
@@ -138,17 +163,11 @@ def tailor_resume(
     """Returns (result, usage summary). api_key=None reads ANTHROPIC_API_KEY."""
     client = anthropic.Anthropic(api_key=api_key or None)
 
-    user_content = (
-        f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
-        f"<job_description_and_feedback>\n{job_feedback}\n</job_description_and_feedback>\n\n"
-        "Tailor the resume for this job following the rules."
-    )
-
     response = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
+        messages=[{"role": "user", "content": _user_content(master_resume, job_feedback)}],
         output_config={
             "effort": effort,
             "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA},
@@ -167,109 +186,56 @@ def tailor_resume(
     text = "".join(block.text for block in response.content if block.type == "text")
     u = response.usage
     usage = f"Model: {response.model} | tokens in: {u.input_tokens}, out: {u.output_tokens}"
-    return json.loads(text), usage
+    return normalize(json.loads(text), RESPONSE_SCHEMA), usage
 
 
 # --------------------------------------------------------------------------- #
-# .docx rendering (single column, plain styles — ATS friendly)
+# Mode 2: Claude.ai subscription (free, copy-paste)
 # --------------------------------------------------------------------------- #
 
-def _bottom_border(paragraph) -> None:
-    p_pr = paragraph._p.get_or_add_pPr()
-    borders = OxmlElement("w:pBdr")
-    bottom = OxmlElement("w:bottom")
-    for key, val in {"w:val": "single", "w:sz": "6", "w:space": "1", "w:color": "808080"}.items():
-        bottom.set(qn(key), val)
-    borders.append(bottom)
-    p_pr.append(borders)
+def _skeleton(schema: dict):
+    if schema["type"] == "object":
+        return {k: _skeleton(s) for k, s in schema["properties"].items()}
+    if schema["type"] == "array":
+        return [_skeleton(schema["items"])]
+    return ""
 
 
-def _section(doc: Document, title: str) -> None:
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(10)
-    p.paragraph_format.space_after = Pt(3)
-    run = p.add_run(title.upper())
-    run.bold = True
-    run.font.size = Pt(11.5)
-    _bottom_border(p)
+def build_manual_prompt(master_resume: str, job_feedback: str) -> str:
+    """One prompt to paste into claude.ai; its reply is read back by parse_claude_reply()."""
+    shape = json.dumps(_skeleton(RESPONSE_SCHEMA), separators=(",", ":"))
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"{_user_content(master_resume, job_feedback)}\n\n"
+        "Output format: reply with ONLY one JSON object (no commentary, no markdown code fences, "
+        f"no artifact) in exactly this shape:\n{shape}"
+    )
 
 
-def _entry_header(doc: Document, left: str, right: str, sub: str = "") -> None:
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(4)
-    p.paragraph_format.space_after = Pt(0)
-    p.add_run(left).bold = True
-    if right:
-        p.add_run(f"  |  {right}")
-    if sub:
-        s = doc.add_paragraph()
-        s.paragraph_format.space_after = Pt(1)
-        s.add_run(sub).italic = True
-
-
-def _bullets(doc: Document, items: list[str]) -> None:
-    for item in items:
-        p = doc.add_paragraph(item, style="List Bullet")
-        p.paragraph_format.space_after = Pt(1)
-
-
-def build_docx(resume: dict, path) -> None:
-    """path may be a file path or a writable binary stream (e.g. io.BytesIO)."""
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(10.5)
-    for section in doc.sections:
-        section.top_margin = section.bottom_margin = Pt(40)
-        section.left_margin = section.right_margin = Pt(50)
-
-    name = doc.add_paragraph()
-    name.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    name.paragraph_format.space_after = Pt(0)
-    run = name.add_run(resume["name"])
-    run.bold = True
-    run.font.size = Pt(20)
-
-    if resume["contact"]:
-        contact = doc.add_paragraph(" | ".join(resume["contact"]))
-        contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    if resume["summary"]:
-        _section(doc, "Summary")
-        doc.add_paragraph(resume["summary"])
-
-    if resume["skills"]:
-        _section(doc, "Skills")
-        doc.add_paragraph(", ".join(resume["skills"]))
-
-    if resume["experience"]:
-        _section(doc, "Experience")
-        for job in resume["experience"]:
-            company = ", ".join(x for x in (job["company"], job["location"]) if x)
-            _entry_header(doc, job["title"], job["dates"], company)
-            _bullets(doc, job["bullets"])
-
-    if resume["projects"]:
-        _section(doc, "Projects")
-        for proj in resume["projects"]:
-            _entry_header(doc, proj["name"], "")
-            _bullets(doc, proj["bullets"])
-
-    if resume["education"]:
-        _section(doc, "Education")
-        for edu in resume["education"]:
-            _entry_header(doc, edu["degree"], edu["dates"], edu["school"])
-            _bullets(doc, edu["details"])
-
-    if resume["certifications"]:
-        _section(doc, "Certifications")
-        _bullets(doc, resume["certifications"])
-
-    doc.save(path)
+def parse_claude_reply(text: str) -> dict:
+    """Read the JSON from a pasted Claude reply (tolerates code fences and extra text)."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1:
+        raise TailorError("No JSON found. Paste Claude's whole reply, starting with { and ending with }.")
+    if end <= start:
+        raise TailorError("The reply looks cut off. Ask Claude to \"continue\" and paste the full JSON.")
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise TailorError(
+            f"Claude's reply is not valid JSON ({e.msg}, line {e.lineno}). "
+            "If the reply was cut off, ask Claude to \"continue\" and paste the full JSON."
+        ) from None
+    if "resume" not in data and "name" in data:  # a bare resume, e.g. a saved .json
+        data = {"resume": data}
+    result = normalize(data, RESPONSE_SCHEMA)
+    if not result["resume"]["name"] and not result["resume"]["experience"]:
+        raise TailorError("The pasted JSON doesn't contain a resume. Paste Claude's whole reply.")
+    return result
 
 
 # --------------------------------------------------------------------------- #
-# CLI
+# Input / file name helpers
 # --------------------------------------------------------------------------- #
 
 def docx_to_text(source) -> str:
@@ -304,16 +270,29 @@ def output_stem(resume: dict, label: str = "") -> str:
     return "_".join(x for x in parts if x)
 
 
+def safe_filename(name: str) -> str:
+    """User-typed file name without extension or characters Windows/macOS reject."""
+    name = re.sub(r"\.(pdf|docx|json)$", "", name.strip(), flags=re.IGNORECASE)
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")[:120]
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tailor a resume to a job description with Claude.")
     parser.add_argument("--resume", default="master_resume.json", help="Master resume (.json, .docx, .md or .txt)")
     parser.add_argument("--job", default="job_feedback.txt", help="Job description and/or ATS feedback")
     parser.add_argument("--out-dir", default="output", help="Output folder (e.g. a Google Drive for desktop folder)")
     parser.add_argument("--label", default="", help="Label for the output file name, e.g. the company")
+    parser.add_argument("--template", default="Classic", choices=list(render.TEMPLATES), help="Resume template")
+    parser.add_argument("--page", default="A4", choices=list(render.PAGE_SIZES), help="Page size")
     args = parser.parse_args()
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit('ANTHROPIC_API_KEY is not set. In PowerShell: $env:ANTHROPIC_API_KEY = "sk-ant-..."')
+        sys.exit('ANTHROPIC_API_KEY is not set. In PowerShell: $env:ANTHROPIC_API_KEY = "sk-ant-..."\n'
+                 "No API credits? Use the free copy-paste mode in the web UI: streamlit run app.py")
 
     resume_path, job_path = Path(args.resume), Path(args.job)
     for p in (resume_path, job_path):
@@ -343,11 +322,11 @@ def main() -> None:
     resume = result["resume"]
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = output_stem(resume, args.label)
-    docx_path, json_path = out_dir / f"{stem}.docx", out_dir / f"{stem}.json"
+    stem = out_dir / output_stem(resume, args.label)
 
-    build_docx(resume, docx_path)
-    json_path.write_text(json.dumps(resume, indent=2, ensure_ascii=False), encoding="utf-8")
+    stem.with_suffix(".pdf").write_bytes(render.build_pdf(resume, args.template, page=args.page))
+    render.build_docx(resume, stem.with_suffix(".docx"), args.template, page=args.page)
+    stem.with_suffix(".json").write_text(json.dumps(resume, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print("\nKeywords added:")
     for k in result["keywords_added"] or [{"keyword": "(none)", "where": ""}]:
@@ -357,7 +336,7 @@ def main() -> None:
         for k in result["keywords_not_added"]:
             print(f"  - {k['keyword']}: {k['reason']}")
 
-    print(f"\nSaved: {docx_path}\n       {json_path}")
+    print(f"\nSaved: {stem}.pdf / .docx / .json")
 
 
 if __name__ == "__main__":
