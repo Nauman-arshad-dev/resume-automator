@@ -1,0 +1,44 @@
+{
+  "name": "Jane Doe",
+  "contact": ["jane.doe@email.com", "+1 555 123 4567", "Toronto, ON", "linkedin.com/in/janedoe"],
+  "summary": "Software engineer with 4 years of experience building backend services and data pipelines in Python.",
+  "skills": ["Python", "SQL", "PostgreSQL", "Django", "REST APIs", "Git", "Docker", "AWS (S3, Lambda)"],
+  "experience": [
+    {
+      "title": "Software Engineer",
+      "company": "Acme Analytics",
+      "location": "Toronto, ON",
+      "dates": "Jan 2023 - Present",
+      "bullets": [
+        "Built Python pipelines that load 2M+ daily records from S3 into PostgreSQL for reporting dashboards.",
+        "Designed REST APIs in Django used by 3 internal teams, cutting manual report requests by 40%.",
+        "Containerised services with Docker and set up automated tests in GitHub Actions."
+      ]
+    },
+    {
+      "title": "Junior Developer",
+      "company": "Bright Web Studio",
+      "location": "Remote",
+      "dates": "Jun 2021 - Dec 2022",
+      "bullets": [
+        "Developed client websites and admin panels with Django and PostgreSQL.",
+        "Wrote SQL queries and scripts to clean and migrate legacy customer data."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Expense Tracker API",
+      "bullets": ["Personal project: FastAPI service with JWT auth, deployed on AWS Lambda."]
+    }
+  ],
+  "education": [
+    {
+      "degree": "B.Sc. Computer Science",
+      "school": "University of Toronto",
+      "dates": "2017 - 2021",
+      "details": []
+    }
+  ],
+  "certifications": ["AWS Certified Cloud Practitioner"]
+}

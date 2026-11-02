@@ -1,0 +1,8 @@
+Paste the job description here, and/or your ATS checker feedback, for example:
+
+JOB: Data Engineer at Northwind
+- Build and maintain ETL pipelines in Python and SQL
+- Experience with data warehousing (Snowflake or Redshift)
+- CI/CD, Docker, cloud (AWS)
+
+ATS feedback - missing keywords: ETL, data warehouse, CI/CD, Airflow, Snowflake
