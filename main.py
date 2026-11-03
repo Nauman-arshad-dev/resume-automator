@@ -103,6 +103,12 @@ RESPONSE_SCHEMA = _obj({
     "keywords_not_added": {"type": "array", "items": _obj({
         "keyword": _STR,
         "reason": _STR,
+        # One-click options for the candidate, used only if they confirm the keyword is true
+        "suggestions": {"type": "array", "items": _obj({
+            "level": _STR,  # "basic" (Skills only) or "experienced" (bullet in a role/project)
+            "where": _STR,  # "Skills" or the role/project, e.g. "Syntivis AG"
+            "text": _STR,   # the Skills entry or the ready-to-use bullet
+        })},
     })},
 })
 
@@ -119,7 +125,8 @@ TAILOR_RULES = """Rules:
 - headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. If a target job title is given and truthfully describes the candidate, start the headline with it verbatim and mention it in the summary. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
 - skills: plain-text entries; group related tools as "Category: tool, tool, tool".
 - Use empty strings or empty lists for fields the master resume does not have.
-- In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2")."""
+- In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2").
+- For each keywords_not_added item, give 1-3 suggestions the candidate can pick with one click IF it is true for them: one with level "basic" (where "Skills", text = the Skills entry, e.g. "GCP (basics)"), and, when an existing role or project plausibly involved it, one or two with level "experienced" (where = that role's company or project name, text = a ready-to-use bullet for that entry, consistent with what the resume says about it, with no invented metrics). The candidate decides what is true; these are options, not claims."""
 
 SYSTEM_PROMPT = f"""You are an expert resume writer who tailors resumes for ATS systems and human recruiters.
 
@@ -138,7 +145,7 @@ Revision rules:
 - If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
 - keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you could not add honestly.
 - Keep everything else from the current resume that the report does not flag.
-- candidate_confirmed_keywords (if given) are skills the candidate personally confirms are true, with a note on where or how they used them. Treat them as facts from the master resume: add every one of them, to Skills and, when the note names a role or project, worded naturally into one of that entry's bullets (or a new bullet there). Use the keyword's exact wording from the ATS report. Do not invent metrics, tools or details beyond the note, and do not list them under keywords_not_added.
+- candidate_confirmed_keywords (if given) are skills the candidate personally confirms are true, with a note on where or how they used them. Treat them as facts from the master resume and add every one of them: if the note says "Skills only", add it only to Skills; if the note gives a suggested bullet for a role or project, add that bullet (lightly edited to fit) to that entry; if the note names a role or project, also word it naturally into one of that entry's bullets (or a new bullet there), and add it to Skills. Use the keyword's exact wording from the ATS report. Do not invent metrics, tools or details beyond the note, and do not list them under keywords_not_added.
 - This may be one of several rounds. If a score_history is given and the score dropped after the last round, undo that kind of change instead of pushing further in the same direction.
 
 These tailoring rules still apply:

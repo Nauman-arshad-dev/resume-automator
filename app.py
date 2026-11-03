@@ -325,7 +325,8 @@ if result:
             st.caption("None")
         st.markdown("**⚠️ Not added** — no supporting experience; add yourself only if true")
         if result["keywords_not_added"]:
-            st.dataframe(result["keywords_not_added"], width="stretch", hide_index=True)
+            st.dataframe([{"keyword": k["keyword"], "reason": k["reason"]} for k in result["keywords_not_added"]],
+                         width="stretch", hide_index=True)
         else:
             st.caption("None")
 
@@ -408,26 +409,50 @@ if result:
     # Keywords Claude couldn't prove from the resume: let the candidate confirm the true ones
     not_added = result["keywords_not_added"]
     confirmed = []
-    with st.expander(f"🔓 Unlock missing keywords — confirm the ones that are true for you "
+    roles = [j["company"] or j["title"] for j in resume["experience"]] + [p["name"] for p in resume["projects"]]
+    with st.expander(f"🔓 Unlock missing keywords — click the ones that are true for you "
                      f"({len(not_added)} not added yet)", expanded=bool(not_added)):
-        st.caption("Claude only adds keywords your resume proves, so the score stalls if the checker wants words "
-                   "your resume doesn't use yet. If you **have** done it, tick it and say briefly where — Claude adds "
-                   "it to Skills and that job's bullets in the next version. Leave skills you don't have unticked: "
-                   "recruiters ask about them in interviews.")
+        st.caption("Claude only adds keywords your resume proves, so the score stalls when the checker wants words "
+                   "your resume doesn't use yet. For each one you **have** done, click how well you know it — the "
+                   "next version adds it. Leave the rest on Skip: recruiters ask about listed skills in interviews.")
         for i, k in enumerate(not_added):
-            tick_col, note_col = st.columns([1, 2])
-            if tick_col.checkbox(k["keyword"], key=f"kw_ok_{version}_{i}"):
-                note = note_col.text_input(
-                    f"Where/how you used {k['keyword']}", key=f"kw_note_{version}_{i}", label_visibility="collapsed",
-                    placeholder="Where/how, e.g. 'built S3 file uploads at Syntivis'",
-                )
-                confirmed.append({"keyword": k["keyword"], "note": note.strip()})
-            else:
-                note_col.caption(k["reason"])
+            # Options: Skip, Claude's suggestions, then built-in fallbacks for any level Claude didn't cover
+            options = [("skip", None, None)]
+            options += [(s["level"].lower(), s["where"], s["text"]) for s in k.get("suggestions", []) if s["text"]]
+            levels = {o[0] for o in options}
+            if "basic" not in levels:
+                options.append(("basic", "Skills", k["keyword"]))
+            options.append(("work", None, None))  # "I used it at work" + pick the role
+
+            def label(o, kw=k["keyword"]):
+                level, where, text = o
+                if level == "skip":
+                    return "Skip — not true for me"
+                if level == "basic":
+                    return f"I know the basics → add “{text}” to Skills"
+                if level == "work":
+                    return "I used it at work → pick where"
+                return f"I've done this at {where} → add: “{text}”"
+
+            with st.container(border=True):
+                st.markdown(f"**{k['keyword']}** — <span style='color:gray'>{k['reason']}</span>",
+                            unsafe_allow_html=True)
+                choice = st.radio(k["keyword"], options, format_func=label, key=f"kw_{version}_{i}",
+                                  label_visibility="collapsed")
+                level, where, text = choice
+                if level == "basic":
+                    confirmed.append({"keyword": k["keyword"], "note": f"Skills only (basic level), as: {text}"})
+                elif level == "work" and roles:
+                    role = st.selectbox("Where did you use it?", roles, key=f"kw_role_{version}_{i}")
+                    confirmed.append({"keyword": k["keyword"],
+                                      "note": f"used it at {role}; add it to Skills and one bullet there, kept general"})
+                elif level not in ("skip", "work"):
+                    confirmed.append({"keyword": k["keyword"],
+                                      "note": f"used it at {where}; suggested bullet: {text}"})
         extra = st.text_area(
-            "Other missing keywords from the report that are true for you — one per line: keyword — where/how",
-            key=f"kw_extra_{version}", height=90,
-            placeholder="uploading — file uploads to S3 in Tracio\nnetworking — VPC and security groups on AWS (SkipQ)",
+            "Optional: other missing keywords from the report that are true for you — one per line: keyword — where/how",
+            key=f"kw_extra_{version}", height=70,
+            placeholder="storage server — MinIO for file storage in Tracio",
         )
         for line in extra.splitlines():
             parts = re.split(r"\s+[—–-]\s+|:\s+", line.strip(), maxsplit=1)  # "keyword — note" or "keyword: note"
