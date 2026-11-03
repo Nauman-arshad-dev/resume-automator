@@ -25,8 +25,8 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 
 1. **Your resume**: upload it once (`.docx`, `.json`, `.md` or `.txt`). It's remembered.
 2. **The job**: paste the job description, plus the exact job title and company.
-3. Click **✨ Tailor my resume**. You get a built-in ATS score right away.
-4. Click **🚀 Auto-improve**. Optionally, first click any missing keywords that are true for you.
+3. Click **✨ Tailor my resume and optimize**. Claude tailors it, then auto-improves it round by round until the target score.
+4. Optional: check it in your own ATS checker, paste its report into the Improve tab and click **🚀 Auto-improve** again.
 5. Pick a **design** and click **⬇️ Download PDF**.
 
 ## Quick start
