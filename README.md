@@ -11,7 +11,9 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 - ✅ **One-click tailoring**: rewrites your summary, skills and bullets for the job, using only facts from your resume.
 - ✅ **Built-in ATS checker**: reads the PDF text like an applicant tracking system and scores it on sections, bullets, length, pronouns, buzzwords, job title and job-keyword coverage.
 - ✅ **🚀 Auto-improve**: check → revise → re-check, round after round, until your target score. Rounds that lower the score are discarded automatically.
-- ✅ **One-click missing keywords**: for each job keyword your resume doesn't prove, choose *I know the basics* or *I've done this at <job>* and it's added in the next round. Nothing is added unless you confirm it's true.
+- ✅ **🎯 Max ATS match** (on by default): puts every job keyword into the resume, in Skills and in a fitting bullet, repeating the ones the posting stresses, aiming for a 100% keyword match. Employers, titles, dates, degrees, certifications and numbers are never invented. Turn it off for strict mode.
+- ✅ **Matches external checkers**: paste a Jobscan / Resume Worded report and every keyword it lists as missing is added, then tracked by the built-in score.
+- ✅ **One-click missing keywords** (strict mode): for each job keyword your resume doesn't prove, choose *I know the basics* or *I've done this at <job>* and it's added in the next round. Nothing is added unless you confirm it's true.
 - ✅ **8 professional resume templates**: Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold, each a different layout. You see all of them with your own resume.
 - ✅ **PDF and Word download**: choose the file name, accent color and A4 / US Letter page size.
 - ✅ **Versions and undo**: every revision is a version with its score, and you can step back any time.
@@ -53,7 +55,7 @@ Your browser opens at `http://localhost:8501`. Choose how to connect to Claude i
 ### Command line (optional)
 
 ```bash
-python main.py --resume my_resume.docx --job job.txt --title "Senior Backend Engineer" --template modern
+python main.py --resume my_resume.docx --job job.txt --title "Senior Backend Engineer" --template modern --max-match
 python main.py --help
 ```
 
@@ -96,10 +98,10 @@ resume-automator/
 Yes. The app is open source, and with Claude Code it runs on your existing Claude Pro/Max subscription (it counts toward your plan's usage limits) with no API credits. API mode costs a few cents per resume.
 
 **Will it make up skills or experience?**
-No. Claude only uses facts from your resume. Keywords your resume doesn't prove are listed separately, and you decide which ones are true.
+In strict mode, no: only facts from your resume are used. With 🎯 Max ATS match on, it adds every job keyword as a skill you vouch for, but never invents employers, titles, dates, degrees, certifications or numbers. Be ready to discuss every skill listed.
 
 **My ATS score stopped going up. Why?**
-The remaining gap is usually job keywords your resume doesn't mention. Open *Missing keywords you might have* in the Improve tab, click the ones that are genuinely true, and run Auto-improve again.
+With Max ATS match on, keywords are covered; what remains is usually checks only real facts can fix, such as too few bullets with numbers or a missing certification. Add real numbers to your master resume. In strict mode, open *Missing keywords you might have* and click the ones that are true.
 
 **Does the built-in score match Jobscan / other checkers?**
 It checks the same things most checkers do, but every checker weighs them differently. Use it to improve quickly, then confirm with your favorite checker. You can paste that checker's report into the Improve tab.

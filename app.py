@@ -82,9 +82,10 @@ def make_gallery(resume_json: str, page: str) -> dict[str, tuple[bytes, int]]:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def ats_check(resume_json: str, template: str, accent: str, page: str, keywords_json: str, job_title: str):
+def ats_check(resume_json: str, template: str, accent: str, page: str, keywords_json: str, job_title: str,
+              job_text: str = ""):
     pdf, _, _ = make_files(resume_json, template, accent, page)
-    return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title)
+    return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title, job_text)
 
 
 def as_json(resume: dict) -> str:
@@ -143,14 +144,24 @@ def run_claude(label: str, system: str, content: str):
     return out
 
 
+def with_all_keywords(result: dict) -> dict:
+    """Max ATS match: any job keyword Claude still left out goes into Skills."""
+    resume, added = ats.ensure_keywords(result["resume"], st.session_state.get("job_keywords", []))
+    if not added:
+        return result
+    return {**result, "resume": resume,
+            "keywords_added": result["keywords_added"] + [{"keyword": k, "where": "Skills"} for k in added]}
+
+
 def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report: str, ctx: dict) -> None:
     """Check → revise → re-check until the target score, no further gain, or max_rounds."""
-    keywords_json = json.dumps(st.session_state.get("job_keywords", []))
     view = (ctx["template"], ctx["accent"], ctx["page"])
+    max_match = ctx["max_match"]
     with st.status("🚀 Improving your resume…", expanded=True) as status:
         for n in range(1, max_rounds + 1):
+            keywords_json = json.dumps(st.session_state.get("job_keywords", []))
             resume = versions()[-1]["result"]["resume"]
-            before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"])
+            before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"])
             first_with_input = n == 1 and bool(confirmed or ext_report)
             if before.score >= target and not first_with_input:
                 status.write(f"Score {before.score} already meets your target of {target}.")
@@ -163,11 +174,18 @@ def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report
             try:
                 new, usage = engines.run(engine_config(), *main.revision_request(
                     ctx["master"], ctx["job_text"], resume, report_text, ctx["job_title"], progress,
-                    confirmed if n == 1 else None))
+                    confirmed if n == 1 else None, max_match))
             except engines.EngineError as e:
                 status.update(label=f"❌ {e}", state="error")
                 return
-            after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"])
+            if ext_report and n == 1:  # track the external checker's keywords from now on
+                merged = list(dict.fromkeys(st.session_state.get("job_keywords", []) + new["job_keywords"]))
+                st.session_state["job_keywords"] = merged
+                keywords_json = json.dumps(merged)
+                before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"])
+            if max_match:
+                new = with_all_keywords(new)
+            after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"], ctx["job_text"])
             if after.score < before.score and not first_with_input:
                 status.write(f"Round {n} would lower the score ({before.score} → {after.score}), so it was discarded.")
                 break
@@ -219,7 +237,8 @@ with st.sidebar:
     remember = st.checkbox("Remember settings and my resume on this laptop", value=saved.get("remember", True),
                            help="Stored in this app's folder only (settings.json, data/). Never uploaded.")
     settings = {"engine": engine, "api_key": api_key, "model_label": model_label, "effort": effort,
-                "out_dir": out_dir, "remember": remember}
+                "out_dir": out_dir, "remember": remember,
+                "max_match": st.session_state.get("max_match", saved.get("max_match", True))}
     if remember and settings != saved:
         SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     elif not remember:
@@ -267,8 +286,26 @@ with col_job:
     job_title = title_col.text_input("Exact job title", placeholder="Senior Backend Engineer",
                                      help="ATS checkers look for the exact title.").strip()
     company = company_col.text_input("Company", placeholder="Northwind", help="Used in the file name.").strip()
+    max_match = st.toggle(
+        "🎯 Max ATS match: add every job keyword", value=saved.get("max_match", True), key="max_match",
+        help="On: every keyword from the job goes into your resume (Skills plus a fitting bullet), aiming for "
+             "100%. Employers, titles, dates, degrees, certifications and numbers are never invented. "
+             "Off: only keywords your resume already proves.")
+    if max_match:
+        st.caption("Adds skills your resume doesn't show yet, so be ready to talk about each one in an interview.")
 
 ready = bool(master and job_text)
+
+if st.session_state.get("template") not in render.TEMPLATES:
+    st.session_state["template"] = next(iter(render.TEMPLATES))
+template = st.session_state["template"]
+meta = render.TEMPLATES[template]
+accent = st.session_state.get(f"accent_{template}") or meta["accent"]
+page = st.session_state.get("page", "A4")
+ctx = {"template": template, "accent": accent, "page": page, "job_title": job_title,
+       "master": master, "job_text": job_text, "max_match": max_match}
+target = st.session_state.get("target", 100 if max_match else 90)
+max_rounds = st.session_state.get("max_rounds", 3)
 
 
 def remember_master() -> None:
@@ -285,27 +322,32 @@ if engine == ENGINE_MANUAL:
         if ready:
             st.markdown("**a.** Copy the prompt (📋 top-right of the box) → **b.** paste it into a "
                         "[new Claude chat](https://claude.ai/new) → **c.** paste Claude's whole reply below.")
-            st.code(main.build_manual_prompt(master, job_text, job_title), language=None, height=150)
+            st.code(main.build_manual_prompt(master, job_text, job_title, max_match), language=None, height=150)
         else:
             st.info("Add your resume and the job description first.")
         reply = st.text_area("Claude's reply", height=110, key="tailor_reply")
         if st.button("✨ Create my resume", type="primary", width="stretch"):
             try:
                 start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", company)
+                if max_match:
+                    versions()[0]["result"] = with_all_keywords(versions()[0]["result"])
                 remember_master()
                 st.rerun()
             except main.TailorError as e:
                 st.error(str(e))
 else:
-    if st.button("✨ Tailor my resume", type="primary", width="stretch",
+    if st.button(f"✨ Tailor my resume and optimize to {target}%", type="primary", width="stretch",
                  disabled=not ready or (engine == ENGINE_CODE and not cli_path),
-                 help=None if ready else "Add your resume and the job description first."):
+                 help="Tailors, then runs Auto-improve rounds until the target score." if ready
+                 else "Add your resume and the job description first."):
         out = run_claude("✍️ Claude is tailoring your resume — usually under a minute…",
-                         *main.tailor_request(master, job_text, job_title))
+                         *main.tailor_request(master, job_text, job_title, max_match))
         if out:
             start_versions(out[0], f"Tailored · {out[1]}", company)
+            if max_match:
+                versions()[0]["result"] = with_all_keywords(out[0])
             remember_master()
-            st.rerun()
+            auto_improve(target, max_rounds, [], "", ctx)  # reruns the page when done
 
 if not versions():
     st.stop()
@@ -319,18 +361,12 @@ result = current["result"]
 resume = result["resume"]
 resume_json = as_json(resume)
 job_keywords = st.session_state.get("job_keywords", [])
-if st.session_state.get("template") not in render.TEMPLATES:
-    st.session_state["template"] = next(iter(render.TEMPLATES))
-template = st.session_state["template"]
-meta = render.TEMPLATES[template]
-accent = st.session_state.get(f"accent_{template}") or meta["accent"]
-page = st.session_state.get("page", "A4")
 filename = main.safe_filename(st.session_state.get("filename", "")) or "resume"
 
 try:
     with st.spinner("Rendering and checking…"):
         pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
-        report = ats_check(resume_json, template, accent, page, json.dumps(job_keywords), job_title)
+        report = ats_check(resume_json, template, accent, page, json.dumps(job_keywords), job_title, job_text)
 except render.RenderError as e:
     st.error(str(e))
     st.stop()
@@ -394,7 +430,11 @@ with tab_improve:
                        for k in report.missing if k.lower() not in known]
         confirmed = []
         roles = [j["company"] or j["title"] for j in resume["experience"]] + [p["name"] for p in resume["projects"]]
-        if candidates:
+        if max_match:  # every keyword is added automatically; only missing credentials remain
+            if result["keywords_not_added"]:
+                st.info("Not added (needs a real credential): "
+                        + ", ".join(k["keyword"] for k in result["keywords_not_added"]))
+        elif candidates:
             with st.expander(f"🔓 Missing keywords you might have ({len(candidates)}) — click the true ones"):
                 st.caption("Claude only adds what your resume proves. If you have done one of these, pick an "
                            "option and the next round adds it. Leave the rest on Skip.")
@@ -430,28 +470,33 @@ with tab_improve:
                     st.success("Next round adds: " + ", ".join(c["keyword"] for c in confirmed))
 
     st.divider()
-    with st.expander("Optional: add a report from an external ATS checker (Jobscan, Resume Worded, …)"):
-        ext_report = st.text_area("Paste the checker's report", height=120, key=f"ext_report_{len(vs)}").strip()
+    st.markdown("**Your ATS checker scored it lower?** Paste its report (select all on its results page, copy, "
+                "paste). The next round adds every keyword it lists as missing, and the built-in score tracks "
+                "them from then on.")
+    ext_report = st.text_area("External ATS checker report (optional)", height=100, key=f"ext_report_{len(vs)}",
+                              label_visibility="collapsed",
+                              placeholder="Paste the Jobscan / Resume Worded / Enhancv report here").strip()
 
-    ctx = {"template": template, "accent": accent, "page": page, "job_title": job_title,
-           "master": master, "job_text": job_text}
     if engine == ENGINE_MANUAL:
         st.markdown("**Improve with claude.ai** — copy the prompt → paste into Claude → paste the reply below.")
         report_text = report.as_text() + (f"\n\nReport from an external ATS checker:\n{ext_report}" if ext_report else "")
         progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(vs) if v["score"] is not None)
-        st.code(main.build_revision_prompt(master, job_text, resume, report_text, job_title, progress, confirmed),
-                language=None, height=130)
+        st.code(main.build_revision_prompt(master, job_text, resume, report_text, job_title, progress, confirmed,
+                                           max_match), language=None, height=130)
         reply = st.text_area("Claude's reply", height=100, key=f"revision_reply_{len(vs)}")
         if st.button(f"🔁 Create version {len(vs) + 1}", type="primary", width="stretch"):
             try:
-                add_version(main.parse_claude_reply(reply), "Revised with claude.ai")
+                new = main.parse_claude_reply(reply)
+                if ext_report:
+                    st.session_state["job_keywords"] = list(dict.fromkeys(job_keywords + new["job_keywords"]))
+                add_version(with_all_keywords(new) if max_match else new, "Revised with claude.ai")
                 st.rerun()
             except main.TailorError as e:
                 st.error(str(e))
     else:
         go_col, target_col, rounds_col = st.columns([1.4, 1, 1])
-        target = target_col.select_slider("Target score", [70, 75, 80, 85, 90, 95, 100], value=90, key="target")
-        max_rounds = rounds_col.select_slider("Max rounds", [1, 2, 3, 4, 5], value=3, key="max_rounds")
+        target = target_col.select_slider("Target score", [70, 75, 80, 85, 90, 95, 100], value=target, key="target")
+        max_rounds = rounds_col.select_slider("Max rounds", [1, 2, 3, 4, 5], value=max_rounds, key="max_rounds")
         go_col.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
         if go_col.button("🚀 Auto-improve", type="primary", width="stretch",
                          help="Check → Claude revises → re-check, until the target or no further gain."):

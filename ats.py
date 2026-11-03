@@ -118,7 +118,37 @@ def _has_keyword(text_lower: str, keyword: str) -> bool:
     return bool(k) and re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", text_lower) is not None
 
 
-def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None, job_title: str = "") -> Report:
+def _count(text_lower: str, keyword: str) -> int:
+    k = keyword.lower().strip()
+    return len(re.findall(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", text_lower)) if k else 0
+
+
+def resume_text(resume: dict) -> str:
+    def walk(value):
+        if isinstance(value, dict):
+            return " \n".join(walk(v) for v in value.values())
+        if isinstance(value, list):
+            return " \n".join(walk(v) for v in value)
+        return str(value)
+    return walk(resume)
+
+
+def ensure_keywords(resume: dict, keywords: list[str]) -> tuple[dict, list[str]]:
+    """Max ATS match safety net: put any job keyword Claude still left out into Skills.
+
+    Returns (resume, keywords added). The resume is copied, never changed in place.
+    """
+    text = resume_text(resume).lower()
+    missing = [k for k in dict.fromkeys(k.strip() for k in keywords if k.strip()) if not _has_keyword(text, k)]
+    if not missing:
+        return resume, []
+    resume = {**resume, "skills": list(resume["skills"])}
+    resume["skills"].append("Additional: " + ", ".join(missing))
+    return resume, missing
+
+
+def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None, job_title: str = "",
+          job_text: str = "") -> Report:
     text = pdf_text(pdf_bytes)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lower_lines = {ln.lower() for ln in lines}
@@ -161,7 +191,8 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
     add("Content", "Bullets start with action verbs", not weak, f"{len(weak)} bullets start weakly "
         f"(e.g. \"{weak[0][:40]}…\")." if weak else "", "Start with verbs like Built, Led, Designed, Reduced.", 3)
     with_numbers = sum(bool(re.search(r"\d", b)) for b in bullets)
-    add("Content", "Results backed by numbers", with_numbers >= 3, f"Only {with_numbers} bullets include a number.",
+    add("Content", "Results backed by numbers", with_numbers >= 5, f"Only {with_numbers} bullets include a number "
+        "(checkers like Jobscan want at least 5).",
         "Add real numbers (users, %, time saved, scale) to a few bullets — only ones you can stand behind.", 4)
     summary_words = len(resume["summary"].split())
     add("Content", "Short summary at the top", 15 <= summary_words <= 90,
@@ -185,8 +216,22 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
         c.earned = weight * len(matched) / len(keywords)
         checks.append(c)
 
+        # External checkers also compare how often a term appears: a keyword the posting
+        # repeats should appear at least twice in the resume.
+        job_lower = job_text.lower()
+        stressed = [k for k in keywords if _count(job_lower, k) >= 2] if job_lower else []
+        thin = [k for k in stressed if _count(text_lower, k) < 2]
+        if stressed:
+            weight = 8.0
+            c = Check("Job match", "Repeated keywords", not thin,
+                      f"{len(thin)} keywords the posting repeats appear only once or never: "
+                      + ", ".join(thin[:12]) + "." if thin else "Passed.",
+                      "Mention each of these at least twice: in Skills and in a bullet or the summary.", weight)
+            c.earned = weight * (len(stressed) - len(thin)) / len(stressed)
+            checks.append(c)
+
     for c in checks:
-        if c.name != "Job keywords":
+        if c.name not in ("Job keywords", "Repeated keywords"):
             c.earned = c.weight if c.ok else 0.0
     score = round(100 * sum(c.earned for c in checks) / sum(c.weight for c in checks))
     return Report(score=score, words=words, checks=checks, matched=matched, missing=missing)
