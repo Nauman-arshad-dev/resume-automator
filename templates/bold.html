@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# Two columns: main content left, tinted side panel right (painted on <html>
+   so it runs the full height of every page). #}
+{% block page_margin %}0{% endblock %}
+{% block style %}
+html { background: linear-gradient(to right, #fff 0 66%, var(--tint) 66% 100%); }
+header { position: relative; padding: 13mm 12mm 0 13mm; display: grid; grid-template-columns: 66% 34%;
+         margin-bottom: -8mm; }
+/* Cloned padding = top/bottom margin on every page; the header's negative
+   margin cancels most of the top padding on page 1. */
+main, aside { box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.name-block { padding-right: 9mm; }
+.name-block::before { content: ""; display: block; width: 34pt; height: 6pt; background: var(--accent); margin-bottom: 9pt; }
+h1 { font-size: 31pt; font-weight: 800; line-height: 1; letter-spacing: -0.8pt; text-transform: uppercase; }
+.headline { margin-top: 6pt; font-size: 10.5pt; font-weight: 600; color: var(--accent); }
+header .contact { padding-left: 8mm; display: flex; flex-direction: column; justify-content: flex-end; gap: 3pt;
+                  font-size: 8.6pt; word-break: break-word; }
+.layout { display: grid; grid-template-columns: 66% 34%; }
+main { padding: 12mm 9mm 12mm 13mm; }
+aside { padding: 12mm 11mm 12mm 8mm; font-size: 9pt; }
+h2 { margin: 12pt 0 6pt; font-size: 11pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6pt; }
+h2::after { content: ""; display: block; width: 22pt; height: 2.5pt; background: var(--accent); margin-top: 3pt; }
+main .entry { margin-bottom: 8pt; }
+.title { font-weight: 700; font-size: 10.4pt; }
+main .sub { font-weight: 600; color: var(--accent); }
+.dates { font-size: 8.6pt; color: var(--muted); }
+aside .row { display: block; }
+aside .dates, aside .sub { display: block; }
+aside .entry { margin-bottom: 6pt; }
+.tags { display: flex; flex-wrap: wrap; gap: 3pt; }
+.tag { padding: 1.5pt 6pt; border-radius: 2pt; font-size: 8.2pt; font-weight: 600; color: #fff; background: var(--accent); }
+.skill-group { margin-bottom: 7pt; }
+.skill-label { font-weight: 700; font-size: 8.8pt; margin-bottom: 3pt; }
+{% endblock %}
+{% block body %}
+<header>
+  <div class="name-block">
+    <h1>{{ r.name }}</h1>
+    {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+  </div>
+  {{ m.contact(r) }}
+</header>
+<div class="layout">
+  <main>
+    {{ m.summary(r, "About Me") }}
+    {{ m.experience(r) }}
+    {{ m.projects(r) }}
+  </main>
+  <aside>
+    {{ m.skills(r, "Skills", "tags") }}
+    {{ m.education(r) }}
+    {{ m.certifications(r) }}
+  </aside>
+</div>
+{% endblock %}

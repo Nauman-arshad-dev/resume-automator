@@ -14,7 +14,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 - ✅ **No hallucinated experience**: keywords are added only where your existing experience supports them. Anything that can't be added honestly is listed separately, so you decide.
 - ✅ **Free with Claude.ai Pro/Max**: copy-paste mode needs no API key or API credits.
 - ✅ **Upload your existing resume**: `.docx` (Word), `.json`, `.md` or `.txt`.
-- ✅ **Resume templates with live preview**: Classic, Modern, Compact and Minimal, with a custom accent color and A4 / US Letter page size.
+- ✅ **8 professional resume templates**: each one is a fully different layout. Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold. You can see all of them with **your own resume** in a visual gallery, then customize the accent color and page size (A4 / US Letter).
 - ✅ **Download as PDF or Word**: rename the file before you download it.
 - ✅ **ATS-friendly output**: single column, standard fonts, no tables or graphics.
 - ✅ **Edit before download**: fix any line in the app and the preview updates instantly.
@@ -27,7 +27,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 1. Upload your **master resume** (the full version with everything you've done).
 2. Paste the **job description** and/or the **ATS report's missing keywords**.
 3. Let Claude tailor it. In **free mode**, copy the generated prompt into [claude.ai](https://claude.ai/new) and paste the reply back. In **API mode**, just click **Tailor resume**. Either way, Claude rewrites the summary, reorders the skills and rephrases bullets to match the role, using only facts from your resume.
-4. Choose a **template**, check the **live preview**, review the keywords that were added or skipped, and download a **PDF** or **Word** resume.
+4. Pick a **design** from the gallery, check the **live preview**, review the keywords that were added or skipped, and download a **PDF** or **Word** resume.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ Your browser opens at `http://localhost:8501`.
 
 **API mode:** choose *Anthropic API key* in the sidebar, enter your key, and click **✨ Tailor resume**. The Anthropic API is billed separately from Claude.ai subscriptions.
 
-Then pick a template, accent color and page size, rename the file, and download the **PDF** or **Word** file.
+Then pick a design from the gallery (each thumbnail shows your own resume), choose an accent color and page size, rename the file, and download the **PDF** or **Word** file.
 
 Sidebar settings:
 - **How to run Claude**: free copy-paste mode or API mode.
@@ -75,7 +75,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 
 python main.py --resume master_resume.json --job job_feedback.txt --label "Acme Data Engineer"
-python main.py --resume my_resume.docx --template Modern --page "US Letter" --out-dir "G:\My Drive\Resumes"
+python main.py --resume my_resume.docx --template sidebar --page "US Letter" --out-dir "G:\My Drive\Resumes"
 python main.py --help
 ```
 
@@ -83,16 +83,34 @@ The CLI uses API mode. Output: `output/<Name>_<Label>_<date>.pdf`, `.docx` and a
 
 Optional environment variables: `RESUME_MODEL` (default `claude-sonnet-5-5`) and `RESUME_EFFORT` (`low` / `medium` / `high`).
 
+## Resume templates
+
+| Template | Layout | Best for |
+|---|---|---|
+| **Classic** | Serif, centered header, ruled sections | Traditional industries, ✅ ATS-friendly |
+| **Modern** | Bold name, accent headings, skills up top | Tech and most roles, ✅ ATS-friendly |
+| **Executive** | Full-width dark header band, small-caps sections | Senior and leadership roles, ✅ ATS-friendly |
+| **Minimal** | Section labels in the left margin, lots of whitespace | Design-conscious roles, ✅ ATS-friendly |
+| **Compact** | Dense, two-column skills and projects | Fitting a long career on one page, ✅ ATS-friendly |
+| **Sidebar** | Colored sidebar with contact, skill tags and education | Emailing directly to recruiters 🎨 |
+| **Timeline** | Career history on a vertical timeline | Showing career progression 🎨 |
+| **Bold** | Large name, colored skill tags, tinted side panel | Startups and creative roles 🎨 |
+
+Designs are HTML/CSS files in [`templates/`](templates/), so adding your own is easy: copy one, change the layout, and register it in `TEMPLATES` in `render.py`.
+
+PDFs are printed by a headless browser. On Windows the built-in **Microsoft Edge** is used automatically. On macOS and Linux, Google Chrome is used if installed; otherwise run `python -m playwright install chromium` once.
+
 ## Project structure
 
 ```
 resume-automator/
 ├── app.py               # Streamlit web UI (free + API modes, templates, preview)
 ├── main.py              # Core logic + CLI (prompt, Claude API call, reply parsing)
-├── render.py            # Resume templates → PDF, Word (.docx) and preview images
+├── render.py            # Renders templates → PDF (headless browser), Word (.docx), previews
+├── templates/           # HTML/CSS resume designs (Jinja2), one file per template
 ├── master_resume.json   # Sample master resume (replace with yours)
 ├── job_feedback.txt     # Sample job description / ATS feedback
-└── requirements.txt     # anthropic, python-docx, streamlit, fpdf2, pypdfium2
+└── requirements.txt     # anthropic, streamlit, playwright, jinja2, python-docx, pypdfium2
 ```
 
 ## FAQ
@@ -117,7 +135,7 @@ Yes. Paste the missing-keywords list from any ATS resume checker into the job de
 
 ## Tech stack
 
-Python · [Anthropic Claude API](https://docs.anthropic.com) (structured JSON output) · [Streamlit](https://streamlit.io) · [fpdf2](https://py-pdf.github.io/fpdf2/) (PDF) · [python-docx](https://python-docx.readthedocs.io) (Word) · [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (preview)
+Python · [Anthropic Claude API](https://docs.anthropic.com) (structured JSON output) · [Streamlit](https://streamlit.io) · HTML/CSS + [Playwright](https://playwright.dev/python/) (PDF) · [python-docx](https://python-docx.readthedocs.io) (Word) · [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (preview)
 
 ## Contributing
 
@@ -129,4 +147,4 @@ Issues and pull requests are welcome. Ideas: cover letter generation, more resum
 
 ---
 
-*Keywords: AI resume tailor, free AI resume builder, resume templates, resume to PDF, ATS resume optimizer, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*
+*Keywords: AI resume tailor, free AI resume builder, professional resume templates, two-column resume template, resume to PDF, ATS resume optimizer, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*

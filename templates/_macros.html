@@ -1,0 +1,71 @@
+{#- Shared building blocks. Each template arranges and styles them differently. -#}
+
+{% macro contact(r, cls="contact") -%}
+<div class="{{ cls }}">{% for c in r.contact %}<span>{{ c | link }}</span>{% endfor %}</div>
+{%- endmacro %}
+
+{% macro bullets(items) -%}
+{% if items %}<ul>{% for b in items %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+{%- endmacro %}
+
+{% macro section(title, cls) -%}
+<section class="sec {{ cls }}"><h2>{{ title }}</h2><div class="sec-body">{{ caller() }}</div></section>
+{%- endmacro %}
+
+{% macro summary(r, title="Summary") -%}
+{% if r.summary %}{% call section(title, "sec-summary") %}<p>{{ r.summary }}</p>{% endcall %}{% endif %}
+{%- endmacro %}
+
+{#- style: "lines" (Label: a, b), "tags" (pills), "list" (one per line) -#}
+{% macro skills(r, title="Skills", style="lines") -%}
+{% if r.skills %}{% call section(title, "sec-skills skills-" ~ style) %}
+  {% for g in r.skills | skill_groups %}
+    {% if style == "lines" %}
+      <p class="skill-line">{% if g.label %}<b>{{ g.label }}:</b> {% endif %}{{ g["items"] | join(", ") }}</p>
+    {% elif style == "tags" %}
+      <div class="skill-group">{% if g.label %}<div class="skill-label">{{ g.label }}</div>{% endif %}
+        <div class="tags">{% for s in g["items"] %}<span class="tag">{{ s }}</span>{% endfor %}</div></div>
+    {% else %}
+      <div class="skill-group">{% if g.label %}<div class="skill-label">{{ g.label }}</div>{% endif %}
+        <div class="skill-items">{{ g["items"] | join(" · ") }}</div></div>
+    {% endif %}
+  {% endfor %}
+{% endcall %}{% endif %}
+{%- endmacro %}
+
+{#- company_first: "Company — Title" ordering used by the Executive design -#}
+{% macro experience(r, title="Experience", company_first=False) -%}
+{% if r.experience %}{% call section(title, "sec-experience") %}
+  {% for j in r.experience %}
+  <div class="entry">
+    <div class="row"><span class="title">{{ j.company if company_first else j.title }}</span><span class="dates">{{ j.dates }}</span></div>
+    <div class="sub">{{ [j.title if company_first else j.company, j.location] | select | join(" · ") }}</div>
+    {{ bullets(j.bullets) }}
+  </div>
+  {% endfor %}
+{% endcall %}{% endif %}
+{%- endmacro %}
+
+{% macro projects(r, title="Projects") -%}
+{% if r.projects %}{% call section(title, "sec-projects") %}
+  {% for p in r.projects %}
+  <div class="entry"><div class="title">{{ p.name }}</div>{{ bullets(p.bullets) }}</div>
+  {% endfor %}
+{% endcall %}{% endif %}
+{%- endmacro %}
+
+{% macro education(r, title="Education") -%}
+{% if r.education %}{% call section(title, "sec-education") %}
+  {% for e in r.education %}
+  <div class="entry">
+    <div class="row"><span class="title">{{ e.degree }}</span><span class="dates">{{ e.dates }}</span></div>
+    <div class="sub">{{ e.school }}</div>
+    {{ bullets(e.details) }}
+  </div>
+  {% endfor %}
+{% endcall %}{% endif %}
+{%- endmacro %}
+
+{% macro certifications(r, title="Certifications") -%}
+{% if r.certifications %}{% call section(title, "sec-certs") %}{{ bullets(r.certifications) }}{% endcall %}{% endif %}
+{%- endmacro %}

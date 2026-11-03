@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# Two columns. The sidebar colour is painted on <html>, which in print fills
+   every page, so it continues onto page 2+. Page margins are zero (so the colour
+   reaches the paper edge); the cloned padding re-creates them on every page. #}
+{% block page_margin %}0{% endblock %}
+{% block style %}
+html { background: linear-gradient(to right, var(--accent) 0 33%, #fff 33% 100%); }
+.layout { display: grid; grid-template-columns: 33% 67%; }
+aside, main { box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+aside { padding: 13mm 8mm 12mm 9mm; color: #fff; font-size: 9.2pt; }
+main { padding: 13mm 11mm 12mm 9mm; }
+h1 { font-size: 22pt; font-weight: 700; line-height: 1.1; }
+.headline { margin-top: 5pt; font-size: 9.5pt; color: color-mix(in srgb, white 82%, var(--accent)); }
+aside .contact { margin-top: 10pt; display: flex; flex-direction: column; gap: 4pt; word-break: break-word; }
+aside h2 { margin: 15pt 0 6pt; font-size: 9.5pt; letter-spacing: 1.6pt; text-transform: uppercase;
+           padding-bottom: 3pt; border-bottom: 1px solid color-mix(in srgb, white 40%, var(--accent)); }
+aside .skill-group { margin-bottom: 6pt; }
+aside .skill-label { font-weight: 600; margin-bottom: 2pt; color: color-mix(in srgb, white 88%, var(--accent)); }
+aside .tags { display: flex; flex-wrap: wrap; gap: 3pt; }
+aside .tag { padding: 1pt 5pt; border-radius: 3pt; font-size: 8.3pt;
+             background: color-mix(in srgb, white 16%, var(--accent)); }
+aside .entry { margin-bottom: 6pt; }
+aside .title { font-weight: 600; }
+aside .row { display: block; }
+aside .dates, aside .sub { display: block; font-size: 8.6pt; color: color-mix(in srgb, white 78%, var(--accent)); }
+aside ul { padding-left: 1em; }
+aside li::marker { color: #fff; }
+main h2 { margin: 2pt 0 7pt; font-size: 12pt; color: var(--accent); letter-spacing: 0.4pt; }
+main .sec + .sec h2 { margin-top: 13pt; }
+main .entry { margin-bottom: 8pt; }
+main .title { font-weight: 700; font-size: 10.5pt; }
+main .dates { font-size: 8.8pt; color: var(--muted); }
+main .sub { color: var(--accent); font-weight: 600; font-size: 9.3pt; margin-bottom: 1pt; }
+{% endblock %}
+{% block body %}
+<div class="layout">
+  <aside>
+    <h1>{{ r.name }}</h1>
+    {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+    {{ m.contact(r) }}
+    {{ m.skills(r, "Skills", "tags") }}
+    {{ m.education(r) }}
+    {{ m.certifications(r) }}
+  </aside>
+  <main>
+    {{ m.summary(r, "Profile") }}
+    {{ m.experience(r) }}
+    {{ m.projects(r) }}
+  </main>
+</div>
+{% endblock %}

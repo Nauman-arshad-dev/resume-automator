@@ -70,6 +70,7 @@ _STR_LIST = {"type": "array", "items": _STR}
 
 RESUME_SCHEMA = _obj({
     "name": _STR,
+    "headline": _STR,  # short professional title, e.g. "Backend Engineer | Node.js, AWS"
     "contact": _STR_LIST,  # e.g. ["email", "phone", "city", "linkedin url"]
     "summary": _STR,
     "skills": _STR_LIST,
@@ -116,6 +117,7 @@ Rules:
 - Keep every role, project, and education entry, in the original order, with the original titles, companies, and dates. You may reorder bullets within a role to put the most relevant first, and reorder the skills list.
 - Keep bullets concise (ideally one line, at most two), starting with strong action verbs. Preserve existing numbers exactly.
 - Rewrite the summary to target this role in 2-3 sentences, using only facts from the resume.
+- headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
 - Use empty strings or empty lists for fields the master resume does not have.
 - In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2")."""
 
@@ -304,7 +306,7 @@ def main() -> None:
     parser.add_argument("--job", default="job_feedback.txt", help="Job description and/or ATS feedback")
     parser.add_argument("--out-dir", default="output", help="Output folder (e.g. a Google Drive for desktop folder)")
     parser.add_argument("--label", default="", help="Label for the output file name, e.g. the company")
-    parser.add_argument("--template", default="Classic", choices=list(render.TEMPLATES), help="Resume template")
+    parser.add_argument("--template", default="classic", choices=list(render.TEMPLATES), help="Resume template")
     parser.add_argument("--page", default="A4", choices=list(render.PAGE_SIZES), help="Page size")
     args = parser.parse_args()
 

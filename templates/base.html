@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ r.name }}</title>
+<style>
+@page { size: {{ page_size }}; margin: {% block page_margin %}13mm 15mm{% endblock %}; }
+:root {
+  --accent: {{ accent }};
+  --tint: color-mix(in srgb, var(--accent) 10%, white);
+  --ink: #1f2328;
+  --muted: #5b6168;
+  --serif: Georgia, Cambria, "Times New Roman", serif;
+  --sans: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: var(--sans); font-size: 10pt; line-height: 1.42; color: var(--ink); }
+a { color: inherit; text-decoration: none; }
+ul { padding-left: 1.15em; }
+li { margin: 1.4pt 0; }
+li::marker { color: var(--accent); }
+h1, h2, h3 { line-height: 1.15; }
+h2 { break-after: avoid-page; break-inside: avoid; }
+.sec-body > :first-child { break-before: avoid-page; }
+.entry { break-inside: avoid-page; }
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 12pt; }
+.dates { white-space: nowrap; }
+{% block style %}{% endblock %}
+</style>
+</head>
+<body>
+{% block body %}{% endblock %}
+</body>
+</html>

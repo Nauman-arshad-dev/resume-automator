@@ -53,6 +53,18 @@ def make_files(resume_json: str, template: str, accent: str, page: str) -> tuple
     return pdf, docx.getvalue(), render.pdf_page_images(pdf)
 
 
+@st.cache_data(show_spinner=False)
+def make_gallery(resume_json: str, page: str) -> dict[str, tuple[bytes, int]]:
+    """First-page thumbnail and page count of every design, using the user's resume."""
+    pdfs = render.build_all_pdfs(json.loads(resume_json), page)
+    return {t: (render.pdf_page_images(pdf, scale=0.6, max_pages=1)[0], render.pdf_page_count(pdf))
+            for t, pdf in pdfs.items()}
+
+
+def pick_template(template_id: str) -> None:
+    st.session_state["template"] = template_id
+
+
 def set_result(result: dict, usage: str, label: str) -> None:
     st.session_state["result"] = result
     st.session_state["usage"] = usage
@@ -193,25 +205,57 @@ else:
                     st.error("Could not reach the Anthropic API. Check your internet connection.")
 
 # --------------------------------------------------------------------------- #
-# 4. Result: template, preview, downloads
+# 4. Design gallery
 # --------------------------------------------------------------------------- #
 result = st.session_state.get("result")
 if result:
     resume = result["resume"]
     resume_json = json.dumps(resume, indent=2, ensure_ascii=False)
+    if st.session_state.get("template") not in render.TEMPLATES:
+        st.session_state["template"] = next(iter(render.TEMPLATES))
+    template = st.session_state["template"]
+    meta = render.TEMPLATES[template]
 
     st.divider()
-    st.subheader("4. Your tailored resume")
+    st.subheader("4. Choose a design")
     st.caption(st.session_state["usage"])
+    page = st.radio("Page size", list(render.PAGE_SIZES), horizontal=True, key="page")
 
+    try:
+        with st.spinner("Rendering all designs with your resume..."):
+            gallery = make_gallery(resume_json, page)
+    except render.RenderError as e:
+        st.error(str(e))
+        st.stop()
+
+    for row_start in range(0, len(render.TEMPLATES), 4):
+        cols = st.columns(4)
+        for col, (tid, info) in zip(cols, list(render.TEMPLATES.items())[row_start:row_start + 4]):
+            thumb, n_pages = gallery[tid]
+            with col, st.container(border=True):
+                st.image(thumb, width="stretch")
+                st.button(("✓ " if tid == template else "") + info["label"], key=f"pick_{tid}",
+                          type="primary" if tid == template else "secondary", width="stretch",
+                          on_click=pick_template, args=(tid,))
+                st.caption(f"{info['about']} · {n_pages} page{'s' if n_pages != 1 else ''} · "
+                           + ("✅ ATS-friendly" if info["ats"] else "🎨 design-focused"))
+
+    # ----------------------------------------------------------------------- #
+    # 5. Customize, preview, download
+    # ----------------------------------------------------------------------- #
+    st.divider()
+    st.subheader(f"5. Customize & download — {meta['label']}")
     controls, preview = st.columns([1, 1.5], gap="large")
     with controls:
-        template = st.selectbox("Template", list(render.TEMPLATES), key="template")
-        accent = st.color_picker("Accent color", render.TEMPLATES[template]["accent"], key=f"accent_{template}")
-        page = st.radio("Page size", list(render.PAGE_SIZES), horizontal=True, key="page")
+        accent = st.color_picker("Accent color", meta["accent"], key=f"accent_{template}")
         filename = main.safe_filename(st.text_input("File name", key="filename")) or "resume"
 
-        pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
+        try:
+            with st.spinner("Rendering..."):
+                pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
+        except render.RenderError as e:
+            st.error(str(e))
+            st.stop()
 
         st.download_button("⬇️ Download PDF", pdf_bytes, f"{filename}.pdf", mime="application/pdf",
                            type="primary", width="stretch")
@@ -220,6 +264,10 @@ if result:
                            width="stretch")
         st.download_button("⬇️ Download .json (reuse as master resume)", resume_json, f"{filename}.json",
                            mime="application/json", width="stretch")
+        st.caption("The Word file is a simplified single-column version of this design, for easy editing.")
+        if not meta["ats"]:
+            st.info("Multi-column designs look great to recruiters, but some applicant tracking systems "
+                    "read them less reliably. For online application portals, an ✅ ATS-friendly design is safer.")
         if out_dir and st.button(f"💾 Save PDF + Word to {out_dir}", width="stretch"):
             try:
                 folder = Path(out_dir)

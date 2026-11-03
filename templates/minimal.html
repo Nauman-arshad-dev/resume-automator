@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block page_margin %}16mm 18mm{% endblock %}
+{% block style %}
+body { font-size: 9.8pt; line-height: 1.5; color: #2b2b2b; }
+header { margin-bottom: 14pt; }
+h1 { font-size: 30pt; font-weight: 200; letter-spacing: -0.5pt; color: var(--accent); }
+.headline { margin-top: 3pt; font-size: 10.5pt; color: var(--muted); }
+.contact { display: flex; flex-wrap: wrap; gap: 2pt 12pt; margin-top: 8pt; font-size: 8.8pt; color: var(--muted); }
+.sec { display: grid; grid-template-columns: 27mm 1fr; gap: 0 12pt; padding: 9pt 0; border-top: 0.6px solid #dcdcdc; }
+h2 { font-size: 8.3pt; font-weight: 600; letter-spacing: 1.8pt; text-transform: uppercase; color: var(--muted); padding-top: 1.5pt; }
+.entry { margin-bottom: 7pt; }
+.entry:last-child { margin-bottom: 0; }
+.title { font-weight: 600; color: #111; }
+.dates { font-size: 8.8pt; color: var(--muted); }
+.sub { color: var(--muted); font-size: 9.2pt; }
+ul { list-style: none; padding-left: 0; }
+li { padding-left: 10pt; position: relative; }
+li::before { content: "–"; position: absolute; left: 0; color: var(--muted); }
+.skill-line { margin-bottom: 2pt; }
+.skill-line b { font-weight: 600; }
+{% endblock %}
+{% block body %}
+<header>
+  <h1>{{ r.name }}</h1>
+  {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+  {{ m.contact(r) }}
+</header>
+{{ m.summary(r, "Profile") }}
+{{ m.experience(r) }}
+{{ m.skills(r, "Skills", "lines") }}
+{{ m.projects(r) }}
+{{ m.education(r) }}
+{{ m.certifications(r) }}
+{% endblock %}

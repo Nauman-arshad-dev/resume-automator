@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block style %}
+header { display: grid; grid-template-columns: 1fr auto; gap: 16pt; align-items: end;
+         padding-bottom: 10pt; border-bottom: 1px solid #d5d8dc; }
+h1 { font-size: 25pt; font-weight: 300; letter-spacing: 0.5pt; }
+h1 b { font-weight: 700; color: var(--accent); }
+.headline { margin-top: 3pt; font-size: 10.5pt; color: var(--muted); }
+header .contact { text-align: right; font-size: 8.8pt; color: var(--muted); }
+header .contact span { display: block; }
+h2 { margin: 14pt 0 7pt; font-size: 10pt; font-weight: 700; letter-spacing: 2pt; text-transform: uppercase; color: var(--accent); }
+.timeline { position: relative; }
+.t-entry { display: grid; grid-template-columns: 27mm 1fr; break-inside: avoid-page; }
+.t-when { padding: 1pt 9pt 0 0; font-size: 8.6pt; font-weight: 600; color: var(--muted); text-align: right; }
+.t-body { position: relative; padding: 0 0 9pt 13pt; border-left: 2px solid color-mix(in srgb, var(--accent) 30%, white); }
+.t-body::before { content: ""; position: absolute; left: -6px; top: 3pt; width: 10px; height: 10px; border-radius: 50%;
+                  background: #fff; border: 2px solid var(--accent); }
+.t-title { font-weight: 700; font-size: 10.5pt; }
+.t-org { color: var(--accent); font-weight: 600; font-size: 9.3pt; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18pt; }
+.tags { display: flex; flex-wrap: wrap; gap: 3pt; }
+.tag { padding: 1pt 6pt; border: 1px solid color-mix(in srgb, var(--accent) 45%, white); border-radius: 9pt;
+       font-size: 8.4pt; color: var(--ink); }
+.skill-group { margin-bottom: 5pt; }
+.skill-label { font-weight: 600; font-size: 9pt; margin-bottom: 2pt; }
+.sec-projects .entry, .sec-education .entry { margin-bottom: 6pt; }
+.title { font-weight: 700; }
+.sub { color: var(--muted); }
+.dates { font-size: 8.8pt; color: var(--muted); }
+{% endblock %}
+{% block body %}
+{% set parts = r.name.split(" ", 1) %}
+<header>
+  <div>
+    <h1>{{ parts[0] }} {% if parts | length > 1 %}<b>{{ parts[1] }}</b>{% endif %}</h1>
+    {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+  </div>
+  {{ m.contact(r) }}
+</header>
+{{ m.summary(r, "About") }}
+{% if r.experience %}
+<section class="sec"><h2>Experience</h2>
+  <div class="timeline">
+  {% for j in r.experience %}
+    <div class="t-entry">
+      <div class="t-when">{{ j.dates }}</div>
+      <div class="t-body">
+        <div class="t-title">{{ j.title }}</div>
+        <div class="t-org">{{ [j.company, j.location] | select | join(" · ") }}</div>
+        {{ m.bullets(j.bullets) }}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+{{ m.skills(r, "Skills", "tags") }}
+{{ m.projects(r) }}
+<div class="split">
+  <div>{{ m.education(r) }}</div>
+  <div>{{ m.certifications(r) }}</div>
+</div>
+{% endblock %}

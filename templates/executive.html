@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{# Full-bleed header band: no page margin on the first page's top/sides. #}
+{% block page_margin %}13mm 0{% endblock %}
+{% block style %}
+@page :first { margin-top: 0; }
+body { font-family: var(--serif); font-size: 10.2pt; }
+header { background: var(--accent); color: #fff; padding: 15mm 17mm 9mm; margin-bottom: 4pt; }
+h1 { font-size: 28pt; font-weight: normal; letter-spacing: 1pt; }
+.headline { margin-top: 4pt; font-family: var(--sans); font-size: 10pt; letter-spacing: 2.2pt;
+            text-transform: uppercase; color: color-mix(in srgb, white 80%, var(--accent)); }
+.contact { display: flex; flex-wrap: wrap; gap: 2pt 16pt; margin-top: 9pt; padding-top: 7pt;
+           border-top: 1px solid color-mix(in srgb, white 35%, var(--accent));
+           font-family: var(--sans); font-size: 8.8pt; color: #fff; }
+main { padding: 0 17mm; }
+h2 { margin: 13pt 0 6pt; font-size: 12pt; font-variant: small-caps; letter-spacing: 1.2pt; color: var(--accent);
+     border-bottom: 0.8px solid #c9ccd1; padding-bottom: 2pt; }
+.entry { margin-bottom: 7pt; }
+.title { font-weight: bold; font-size: 10.6pt; }
+.dates { font-family: var(--sans); font-size: 8.8pt; color: var(--muted); letter-spacing: 0.4pt; }
+.sub { font-style: italic; color: var(--accent); margin-bottom: 1pt; }
+.sec-summary p { font-size: 10.6pt; }
+.skills-list .skill-group { display: grid; grid-template-columns: 34% 1fr; gap: 8pt; margin: 2pt 0; }
+.skill-label { font-weight: bold; }
+{% endblock %}
+{% block body %}
+<header>
+  <h1>{{ r.name }}</h1>
+  {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+  {{ m.contact(r) }}
+</header>
+<main>
+{{ m.summary(r, "Executive Summary") }}
+{{ m.experience(r, "Career History", company_first=True) }}
+{{ m.skills(r, "Areas of Expertise", "list") }}
+{{ m.projects(r, "Selected Projects") }}
+{{ m.education(r) }}
+{{ m.certifications(r) }}
+</main>
+{% endblock %}
