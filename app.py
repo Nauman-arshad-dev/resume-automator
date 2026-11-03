@@ -14,6 +14,7 @@ Two ways to run Claude:
 
 import io
 import json
+import re
 from pathlib import Path
 
 import anthropic
@@ -404,8 +405,37 @@ if result:
         placeholder="Paste everything the checker shows, e.g.\n\nMissing from your resume: gcp, networking, client libraries\n"
                     "Length (1002 words): aim for 300 to 800 words\nWritten without \"I\" and \"my\": found 6 first-person pronouns",
     ).strip()
-    st.caption("Claude fixes everything it truthfully can. Keywords for skills you don't have stay under "
-               "\"Not added\" — a checker may never reach 100% without them, and that's the honest ceiling.")
+    # Keywords Claude couldn't prove from the resume: let the candidate confirm the true ones
+    not_added = result["keywords_not_added"]
+    confirmed = []
+    with st.expander(f"🔓 Unlock missing keywords — confirm the ones that are true for you "
+                     f"({len(not_added)} not added yet)", expanded=bool(not_added)):
+        st.caption("Claude only adds keywords your resume proves, so the score stalls if the checker wants words "
+                   "your resume doesn't use yet. If you **have** done it, tick it and say briefly where — Claude adds "
+                   "it to Skills and that job's bullets in the next version. Leave skills you don't have unticked: "
+                   "recruiters ask about them in interviews.")
+        for i, k in enumerate(not_added):
+            tick_col, note_col = st.columns([1, 2])
+            if tick_col.checkbox(k["keyword"], key=f"kw_ok_{version}_{i}"):
+                note = note_col.text_input(
+                    f"Where/how you used {k['keyword']}", key=f"kw_note_{version}_{i}", label_visibility="collapsed",
+                    placeholder="Where/how, e.g. 'built S3 file uploads at Syntivis'",
+                )
+                confirmed.append({"keyword": k["keyword"], "note": note.strip()})
+            else:
+                note_col.caption(k["reason"])
+        extra = st.text_area(
+            "Other missing keywords from the report that are true for you — one per line: keyword — where/how",
+            key=f"kw_extra_{version}", height=90,
+            placeholder="uploading — file uploads to S3 in Tracio\nnetworking — VPC and security groups on AWS (SkipQ)",
+        )
+        for line in extra.splitlines():
+            parts = re.split(r"\s+[—–-]\s+|:\s+", line.strip(), maxsplit=1)  # "keyword — note" or "keyword: note"
+            if parts[0]:
+                confirmed.append({"keyword": parts[0], "note": parts[1].strip() if len(parts) > 1 else ""})
+        if confirmed:
+            st.success(f"{len(confirmed)} keyword(s) will be added in version {version + 1}: "
+                       + ", ".join(c["keyword"] for c in confirmed))
 
     progress_note = ", ".join(f"v{r['Version']}: {r['ATS score']}%" for r in rounds if r["ATS score"] is not None)
     if ats_score is not None:
@@ -415,8 +445,8 @@ if result:
         if ats_report:
             st.markdown("**a.** Copy this prompt → **b.** paste it into Claude (a [new chat](https://claude.ai/new) "
                         "is fine) → **c.** paste Claude's whole reply below.")
-            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title, progress_note),
-                    language=None, height=160)
+            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title, progress_note,
+                                               confirmed), language=None, height=160)
         revision_reply = st.text_area("Paste Claude's revised reply here", height=130, key="revision_reply",
                                       placeholder='{"resume": {"name": ...}, ...}')
         if st.button(f"🔁 Create version {version + 1} from reply", type="primary", width="stretch"):
@@ -433,7 +463,8 @@ if result:
         else:
             with st.spinner("Claude is revising your resume..."):
                 out, error = call_api(main.revise_resume, master, job_text, resume, ats_report, api_key=api_key,
-                                      model=model_id, effort=effort, job_title=job_title, progress=progress_note)
+                                      model=model_id, effort=effort, job_title=job_title, progress=progress_note,
+                                      confirmed=confirmed)
             if error:
                 st.error(error)
             else:

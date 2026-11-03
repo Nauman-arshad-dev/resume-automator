@@ -125,6 +125,9 @@ It's an AI **resume tailoring** tool. You start from your own resume and it adap
 **Will it make up skills or experience?**
 No. The prompt forbids inventing employers, dates, metrics, tools or responsibilities. Keywords without supporting experience are reported under "Not added" instead of being inserted.
 
+**My ATS score stopped going up. Why?**
+The checker is probably asking for keywords your resume doesn't mention, so Claude won't add them. In step 6, open *Unlock missing keywords*, tick the ones that are genuinely true for you, and note where you used them. The next version adds them to Skills and the right job's bullets.
+
 **Is it free?**
 Yes. The app is open source, and the copy-paste mode uses your existing Claude.ai subscription (Pro/Max) at no extra cost. API mode costs a few cents per resume with Claude Sonnet, and less with Haiku.
 

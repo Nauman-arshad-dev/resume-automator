@@ -138,6 +138,7 @@ Revision rules:
 - If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
 - keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you could not add honestly.
 - Keep everything else from the current resume that the report does not flag.
+- candidate_confirmed_keywords (if given) are skills the candidate personally confirms are true, with a note on where or how they used them. Treat them as facts from the master resume: add every one of them, to Skills and, when the note names a role or project, worded naturally into one of that entry's bullets (or a new bullet there). Use the keyword's exact wording from the ATS report. Do not invent metrics, tools or details beyond the note, and do not list them under keywords_not_added.
 - This may be one of several rounds. If a score_history is given and the score dropped after the last round, undo that kind of change instead of pushing further in the same direction.
 
 These tailoring rules still apply:
@@ -162,10 +163,13 @@ def _user_content(master_resume: str, job_feedback: str, job_title: str = "") ->
 
 
 def _revision_content(master_resume: str, job_feedback: str, job_title: str, resume: dict, ats_report: str,
-                      progress: str = "") -> str:
+                      progress: str = "", confirmed: list[dict] | None = None) -> str:
     master = master_resume or "(not provided: treat the current resume as the source of facts)"
     current = json.dumps(resume, ensure_ascii=False, separators=(",", ":"))
     history = f"<score_history>{progress}</score_history>\n\n" if progress else ""
+    if confirmed:
+        lines = "\n".join(f"- {c['keyword']}" + (f": {c['note']}" if c.get("note") else "") for c in confirmed)
+        history += f"<candidate_confirmed_keywords>\n{lines}\n</candidate_confirmed_keywords>\n\n"
     return (
         f"<master_resume>\n{master}\n</master_resume>\n\n"
         f"<job_description>\n{job_feedback or '(not provided)'}\n</job_description>\n\n"
@@ -220,9 +224,14 @@ def revise_resume(
     effort: str = EFFORT,
     job_title: str = "",
     progress: str = "",
+    confirmed: list[dict] | None = None,
 ) -> tuple[dict, str]:
-    """Revise an already-tailored resume using an ATS checker report (progress: e.g. "v1: 62%, v2: 78%")."""
-    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress)
+    """Revise an already-tailored resume using an ATS checker report.
+
+    progress: score history, e.g. "v1: 62%, v2: 78%". confirmed: [{"keyword", "note"}] the
+    candidate confirms are true although the master resume doesn't mention them.
+    """
+    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress, confirmed)
     return _call_claude(REVISION_PROMPT, content, api_key, model, effort)
 
 
@@ -273,9 +282,9 @@ def build_manual_prompt(master_resume: str, job_feedback: str, job_title: str = 
 
 
 def build_revision_prompt(master_resume: str, job_feedback: str, resume: dict, ats_report: str,
-                          job_title: str = "", progress: str = "") -> str:
+                          job_title: str = "", progress: str = "", confirmed: list[dict] | None = None) -> str:
     """Copy-paste version of revise_resume()."""
-    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress)
+    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress, confirmed)
     return _manual_prompt(REVISION_PROMPT, content)
 
 
