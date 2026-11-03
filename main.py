@@ -208,22 +208,40 @@ def build_manual_prompt(master_resume: str, job_feedback: str) -> str:
         f"{SYSTEM_PROMPT}\n\n"
         f"{_user_content(master_resume, job_feedback)}\n\n"
         "Output format: reply with ONLY one JSON object (no commentary, no markdown code fences, "
-        f"no artifact) in exactly this shape:\n{shape}"
+        "no artifact), using straight ASCII double quotes (\"), never curly quotes, "
+        f"in exactly this shape:\n{shape}"
     )
 
 
+# Curly quotes that Word, notes apps and phone keyboards ("smart punctuation")
+# substitute for JSON's straight double quote when a reply is copied through them.
+_SMART_DOUBLE_QUOTES = str.maketrans({c: '"' for c in "“”„‟″"})
+
+
+def _load_json(text: str):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        fixed = text.translate(_SMART_DOUBLE_QUOTES)
+        if fixed == text:
+            raise
+        return json.loads(fixed)
+
+
 def parse_claude_reply(text: str) -> dict:
-    """Read the JSON from a pasted Claude reply (tolerates code fences and extra text)."""
+    """Read the JSON from a pasted Claude reply (tolerates code fences, extra text and smart quotes)."""
     start, end = text.find("{"), text.rfind("}")
     if start == -1:
         raise TailorError("No JSON found. Paste Claude's whole reply, starting with { and ending with }.")
     if end <= start:
         raise TailorError("The reply looks cut off. Ask Claude to \"continue\" and paste the full JSON.")
     try:
-        data = json.loads(text[start:end + 1])
+        data = _load_json(text[start:end + 1])
     except json.JSONDecodeError as e:
+        near = e.doc[max(0, e.pos - 40):e.pos + 40].replace("\n", " ")
         raise TailorError(
-            f"Claude's reply is not valid JSON ({e.msg}, line {e.lineno}). "
+            f"Claude's reply is not valid JSON ({e.msg}) near: …{near}…  "
+            "Copy the reply with the copy button under Claude's message and paste it here directly. "
             "If the reply was cut off, ask Claude to \"continue\" and paste the full JSON."
         ) from None
     if "resume" not in data and "name" in data:  # a bare resume, e.g. a saved .json
