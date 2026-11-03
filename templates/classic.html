@@ -3,11 +3,11 @@
 {% block style %}
 body { font-family: var(--serif); font-size: 10.3pt; }
 header { text-align: center; margin-bottom: 6pt; }
-h1 { font-size: 23pt; font-weight: normal; letter-spacing: 3pt; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: 23pt; font-weight: normal; text-transform: uppercase; color: var(--accent); }
 .headline { margin-top: 3pt; font-style: italic; color: var(--muted); }
 .contact { margin-top: 5pt; font-size: 9.2pt; color: var(--muted); }
 .contact span + span::before { content: "\00a0\00a0\2022\00a0\00a0"; color: #aaa; }
-h2 { margin: 12pt 0 5pt; padding-bottom: 2pt; font-size: 10.5pt; font-weight: bold; letter-spacing: 1.6pt;
+h2 { margin: 12pt 0 5pt; padding-bottom: 2pt; font-size: 10.5pt; font-weight: bold;
      text-transform: uppercase; color: var(--accent); border-bottom: 1.2px solid var(--accent); }
 .entry { margin-bottom: 6pt; }
 .title { font-weight: bold; }
@@ -20,8 +20,8 @@ h2 { margin: 12pt 0 5pt; padding-bottom: 2pt; font-size: 10.5pt; font-weight: bo
   {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
   {{ m.contact(r) }}
 </header>
-{{ m.summary(r, "Profile") }}
-{{ m.experience(r, "Professional Experience") }}
+{{ m.summary(r) }}
+{{ m.experience(r) }}
 {{ m.skills(r, "Skills", "lines") }}
 {{ m.projects(r) }}
 {{ m.education(r) }}

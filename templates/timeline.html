@@ -3,12 +3,12 @@
 {% block style %}
 header { display: grid; grid-template-columns: 1fr auto; gap: 16pt; align-items: end;
          padding-bottom: 10pt; border-bottom: 1px solid #d5d8dc; }
-h1 { font-size: 25pt; font-weight: 300; letter-spacing: 0.5pt; }
+h1 { font-size: 25pt; font-weight: 300; }
 h1 b { font-weight: 700; color: var(--accent); }
 .headline { margin-top: 3pt; font-size: 10.5pt; color: var(--muted); }
 header .contact { text-align: right; font-size: 8.8pt; color: var(--muted); }
 header .contact span { display: block; }
-h2 { margin: 14pt 0 7pt; font-size: 10pt; font-weight: 700; letter-spacing: 2pt; text-transform: uppercase; color: var(--accent); }
+h2 { margin: 14pt 0 7pt; font-size: 10pt; font-weight: 700; text-transform: uppercase; color: var(--accent); }
 .timeline { position: relative; }
 .t-entry { display: grid; grid-template-columns: 27mm 1fr; break-inside: avoid-page; }
 .t-when { padding: 1pt 9pt 0 0; font-size: 8.6pt; font-weight: 600; color: var(--muted); text-align: right; }
@@ -37,7 +37,7 @@ h2 { margin: 14pt 0 7pt; font-size: 10pt; font-weight: 700; letter-spacing: 2pt;
   </div>
   {{ m.contact(r) }}
 </header>
-{{ m.summary(r, "About") }}
+{{ m.summary(r) }}
 {% if r.experience %}
 <section class="sec"><h2>Experience</h2>
   <div class="timeline">

@@ -13,7 +13,7 @@ main { padding: 13mm 11mm 12mm 9mm; }
 h1 { font-size: 22pt; font-weight: 700; line-height: 1.1; }
 .headline { margin-top: 5pt; font-size: 9.5pt; color: color-mix(in srgb, white 82%, var(--accent)); }
 aside .contact { margin-top: 10pt; display: flex; flex-direction: column; gap: 4pt; word-break: break-word; }
-aside h2 { margin: 15pt 0 6pt; font-size: 9.5pt; letter-spacing: 1.6pt; text-transform: uppercase;
+aside h2 { margin: 15pt 0 6pt; font-size: 9.5pt; text-transform: uppercase;
            padding-bottom: 3pt; border-bottom: 1px solid color-mix(in srgb, white 40%, var(--accent)); }
 aside .skill-group { margin-bottom: 6pt; }
 aside .skill-label { font-weight: 600; margin-bottom: 2pt; color: color-mix(in srgb, white 88%, var(--accent)); }
@@ -24,9 +24,8 @@ aside .entry { margin-bottom: 6pt; }
 aside .title { font-weight: 600; }
 aside .row { display: block; }
 aside .dates, aside .sub { display: block; font-size: 8.6pt; color: color-mix(in srgb, white 78%, var(--accent)); }
-aside ul { padding-left: 1em; }
-aside li::marker { color: #fff; }
-main h2 { margin: 2pt 0 7pt; font-size: 12pt; color: var(--accent); letter-spacing: 0.4pt; }
+aside .bullet { color: #fff; }
+main h2 { margin: 2pt 0 7pt; font-size: 12pt; color: var(--accent); }
 main .sec + .sec h2 { margin-top: 13pt; }
 main .entry { margin-bottom: 8pt; }
 main .title { font-weight: 700; font-size: 10.5pt; }
@@ -44,7 +43,7 @@ main .sub { color: var(--accent); font-weight: 600; font-size: 9.3pt; margin-bot
     {{ m.certifications(r) }}
   </aside>
   <main>
-    {{ m.summary(r, "Profile") }}
+    {{ m.summary(r) }}
     {{ m.experience(r) }}
     {{ m.projects(r) }}
   </main>

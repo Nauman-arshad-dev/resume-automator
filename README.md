@@ -17,6 +17,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 - ✅ **8 professional resume templates**: each one is a fully different layout. Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold. You can see all of them with **your own resume** in a visual gallery, then customize the accent color and page size (A4 / US Letter).
 - ✅ **Download as PDF or Word**: rename the file before you download it.
 - ✅ **ATS-friendly output**: single column, standard fonts, no tables or graphics.
+- ✅ **ATS checker feedback loop**: paste the report from Jobscan, Resume Worded or any ATS checker, and Claude revises the content to fix length, bullets, pronouns, buzzwords, job title and missing keywords. One-click undo.
 - ✅ **Edit before download**: fix any line in the app and the preview updates instantly.
 - ✅ **Google Drive / Google Docs sync**: save straight into your Google Drive for desktop folder.
 - ✅ **Low token cost**: one request, compact input, adjustable model and effort.
@@ -28,6 +29,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 2. Paste the **job description** and/or the **ATS report's missing keywords**.
 3. Let Claude tailor it. In **free mode**, copy the generated prompt into [claude.ai](https://claude.ai/new) and paste the reply back. In **API mode**, just click **Tailor resume**. Either way, Claude rewrites the summary, reorders the skills and rephrases bullets to match the role, using only facts from your resume.
 4. Pick a **design** from the gallery, check the **live preview**, review the keywords that were added or skipped, and download a **PDF** or **Word** resume.
+5. Run the PDF through an **ATS checker**, paste its report into the app, and let Claude **revise** the resume. Repeat until the score is where you want it.
 
 ## Quick start
 
@@ -90,11 +92,13 @@ Optional environment variables: `RESUME_MODEL` (default `claude-sonnet-5-5`) and
 | **Classic** | Serif, centered header, ruled sections | Traditional industries, ✅ ATS-friendly |
 | **Modern** | Bold name, accent headings, skills up top | Tech and most roles, ✅ ATS-friendly |
 | **Executive** | Full-width dark header band, small-caps sections | Senior and leadership roles, ✅ ATS-friendly |
-| **Minimal** | Section labels in the left margin, lots of whitespace | Design-conscious roles, ✅ ATS-friendly |
+| **Minimal** | Section labels in the left margin, lots of whitespace | Design-conscious roles 🎨 |
 | **Compact** | Dense, two-column skills and projects | Fitting a long career on one page, ✅ ATS-friendly |
 | **Sidebar** | Colored sidebar with contact, skill tags and education | Emailing directly to recruiters 🎨 |
 | **Timeline** | Career history on a vertical timeline | Showing career progression 🎨 |
 | **Bold** | Large name, colored skill tags, tinted side panel | Startups and creative roles 🎨 |
+
+All templates use standard section headings (Summary, Skills, Experience, Projects, Education, Certifications), plain-text bullet characters and no letter-spacing, so ATS parsers can read the PDF text correctly.
 
 Designs are HTML/CSS files in [`templates/`](templates/), so adding your own is easy: copy one, change the layout, and register it in `TEMPLATES` in `render.py`.
 
@@ -131,7 +135,7 @@ Yes. Choose a template and download a PDF or Word file with any file name you li
 Yes. Upload the `.docx` to Google Drive and choose *Open with → Google Docs*, or set the output folder to your Google Drive for desktop folder.
 
 **Does it work with Jobscan / ATS checker results?**
-Yes. Paste the missing-keywords list from any ATS resume checker into the job description box.
+Yes. After you create a resume, paste the full ATS checker report into the *Improve with ATS checker feedback* section, and Claude revises the resume to fix the issues it raises, without inventing experience.
 
 ## Tech stack
 
@@ -147,4 +151,4 @@ Issues and pull requests are welcome. Ideas: cover letter generation, more resum
 
 ---
 
-*Keywords: AI resume tailor, free AI resume builder, professional resume templates, two-column resume template, resume to PDF, ATS resume optimizer, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*
+*Keywords: AI resume tailor, ATS checker feedback, improve ATS score, free AI resume builder, professional resume templates, two-column resume template, resume to PDF, ATS resume optimizer, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*

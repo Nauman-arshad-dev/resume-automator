@@ -32,7 +32,7 @@ TEMPLATES = {
     "classic": {"label": "Classic", "about": "Traditional serif, centered header", "accent": "#1F2937", "ats": True, "font": "Georgia", "align": "C"},
     "modern": {"label": "Modern", "about": "Clean sans-serif, bold accent headings", "accent": "#1F4E79", "ats": True, "font": "Arial", "align": "L"},
     "executive": {"label": "Executive", "about": "Dark header band, leadership style", "accent": "#14304D", "ats": True, "font": "Georgia", "align": "L"},
-    "minimal": {"label": "Minimal", "about": "Airy, section labels in the margin", "accent": "#111111", "ats": True, "font": "Arial", "align": "L"},
+    "minimal": {"label": "Minimal", "about": "Airy, section labels in the margin", "accent": "#111111", "ats": False, "font": "Arial", "align": "L"},
     "compact": {"label": "Compact", "about": "Dense two-column skills, fits one page", "accent": "#7A1F2B", "ats": True, "font": "Arial", "align": "L"},
     "sidebar": {"label": "Sidebar", "about": "Colored sidebar with skills & education", "accent": "#24476B", "ats": False, "font": "Arial", "align": "L"},
     "timeline": {"label": "Timeline", "about": "Career on a vertical timeline", "accent": "#0E7C66", "ats": False, "font": "Arial", "align": "L"},

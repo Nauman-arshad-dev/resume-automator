@@ -106,31 +106,70 @@ RESPONSE_SCHEMA = _obj({
     })},
 })
 
-SYSTEM_PROMPT = """You are an expert resume writer who tailors resumes for ATS systems and human recruiters.
-
-You receive a candidate's master resume and a job description and/or ATS feedback listing missing keywords. Return a tailored version of the resume.
-
-Rules:
+TAILOR_RULES = """Rules:
 - Truthfulness comes first. Only use facts present in the master resume. Never invent employers, titles, dates, degrees, certifications, metrics, tools, or responsibilities.
 - Add a missing keyword only where the existing experience genuinely supports it (for example, rephrasing "built data pipelines in Python" to mention "ETL" is fine; adding "Kubernetes" to a role that never mentions containers is not). Weave keywords into existing bullets, the summary, or the skills list in natural language; do not keyword-stuff.
 - If a keyword cannot be added honestly, leave it out and list it under keywords_not_added with a short reason, so the candidate can decide whether it truly applies.
 - Keep every role, project, and education entry, in the original order, with the original titles, companies, and dates. You may reorder bullets within a role to put the most relevant first, and reorder the skills list.
 - Keep bullets concise (ideally one line, at most two), starting with strong action verbs. Preserve existing numbers exactly.
-- Rewrite the summary to target this role in 2-3 sentences, using only facts from the resume.
-- headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
+- Write every role as bullet points, never as paragraphs: 3-6 bullets for recent or relevant roles, 1-3 for older ones.
+- Never use first-person pronouns (I, me, my) or empty buzzwords (team player, hard worker, results-driven, go-getter); show the skill with a concrete example instead.
+- Keep the whole resume to roughly 450-800 words by trimming the least relevant bullets, not by dropping roles.
+- Rewrite the summary to target this role in 2-3 sentences (title, years of experience, top skills), using only facts from the resume.
+- headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. If a target job title is given and truthfully describes the candidate, start the headline with it verbatim and mention it in the summary. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
+- skills: plain-text entries; group related tools as "Category: tool, tool, tool".
 - Use empty strings or empty lists for fields the master resume does not have.
 - In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2")."""
+
+SYSTEM_PROMPT = f"""You are an expert resume writer who tailors resumes for ATS systems and human recruiters.
+
+You receive a candidate's master resume and a job description and/or ATS feedback listing missing keywords. Return a tailored version of the resume.
+
+{TAILOR_RULES}"""
+
+REVISION_PROMPT = f"""You are an expert resume writer revising a resume you tailored earlier, using a report from an ATS (applicant tracking system) checker.
+
+You receive the candidate's master resume (the only source of facts), the job description, the current tailored resume (JSON) and the ATS checker report. Return the complete revised resume.
+
+Revision rules:
+- Fix every content issue in the report that can be fixed truthfully, for example: length (trim the least relevant bullets to reach the suggested word count), paragraphs instead of bullets, first-person pronouns, buzzwords, a missing or weak summary, the job title missing from the headline or summary.
+- Missing keywords: add each one only where the master resume supports it, in natural language (skills, summary or the relevant bullet). List the rest under keywords_not_added with a reason.
+- Ignore checks about section headings, columns, tables, fonts or file format: the app's templates already use standard headings (Summary, Skills, Experience, Projects, Education, Certifications) and a parseable layout. Do not change content to compensate for them.
+- If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
+- keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you could not add honestly.
+- Keep everything else from the current resume that the report does not flag.
+
+These tailoring rules still apply:
+{TAILOR_RULES}"""
 
 
 class TailorError(Exception):
     """Claude finished without a usable resume (refusal, truncated or unreadable output)."""
 
 
-def _user_content(master_resume: str, job_feedback: str) -> str:
+def _title_block(job_title: str) -> str:
+    return f"<target_job_title>{job_title}</target_job_title>\n\n" if job_title.strip() else ""
+
+
+def _user_content(master_resume: str, job_feedback: str, job_title: str = "") -> str:
     return (
         f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
         f"<job_description_and_feedback>\n{job_feedback}\n</job_description_and_feedback>\n\n"
+        f"{_title_block(job_title)}"
         "Tailor the resume for this job following the rules."
+    )
+
+
+def _revision_content(master_resume: str, job_feedback: str, job_title: str, resume: dict, ats_report: str) -> str:
+    master = master_resume or "(not provided: treat the current resume as the source of facts)"
+    current = json.dumps(resume, ensure_ascii=False, separators=(",", ":"))
+    return (
+        f"<master_resume>\n{master}\n</master_resume>\n\n"
+        f"<job_description>\n{job_feedback or '(not provided)'}\n</job_description>\n\n"
+        f"{_title_block(job_title)}"
+        f"<current_resume>\n{current}\n</current_resume>\n\n"
+        f"<ats_report>\n{ats_report}\n</ats_report>\n\n"
+        "Revise the resume to fix the issues in the ATS report, following the rules."
     )
 
 
@@ -161,15 +200,35 @@ def tailor_resume(
     api_key: str | None = None,
     model: str = MODEL,
     effort: str = EFFORT,
+    job_title: str = "",
 ) -> tuple[dict, str]:
     """Returns (result, usage summary). api_key=None reads ANTHROPIC_API_KEY."""
+    return _call_claude(SYSTEM_PROMPT, _user_content(master_resume, job_feedback, job_title), api_key, model, effort)
+
+
+def revise_resume(
+    master_resume: str,
+    job_feedback: str,
+    resume: dict,
+    ats_report: str,
+    api_key: str | None = None,
+    model: str = MODEL,
+    effort: str = EFFORT,
+    job_title: str = "",
+) -> tuple[dict, str]:
+    """Revise an already-tailored resume using an ATS checker report."""
+    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report)
+    return _call_claude(REVISION_PROMPT, content, api_key, model, effort)
+
+
+def _call_claude(system: str, content: str, api_key: str | None, model: str, effort: str) -> tuple[dict, str]:
     client = anthropic.Anthropic(api_key=api_key or None)
 
     response = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": _user_content(master_resume, job_feedback)}],
+        system=system,
+        messages=[{"role": "user", "content": content}],
         output_config={
             "effort": effort,
             "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA},
@@ -203,12 +262,22 @@ def _skeleton(schema: dict):
     return ""
 
 
-def build_manual_prompt(master_resume: str, job_feedback: str) -> str:
+def build_manual_prompt(master_resume: str, job_feedback: str, job_title: str = "") -> str:
     """One prompt to paste into claude.ai; its reply is read back by parse_claude_reply()."""
+    return _manual_prompt(SYSTEM_PROMPT, _user_content(master_resume, job_feedback, job_title))
+
+
+def build_revision_prompt(master_resume: str, job_feedback: str, resume: dict, ats_report: str,
+                          job_title: str = "") -> str:
+    """Copy-paste version of revise_resume()."""
+    return _manual_prompt(REVISION_PROMPT, _revision_content(master_resume, job_feedback, job_title, resume, ats_report))
+
+
+def _manual_prompt(system: str, content: str) -> str:
     shape = json.dumps(_skeleton(RESPONSE_SCHEMA), separators=(",", ":"))
     return (
-        f"{SYSTEM_PROMPT}\n\n"
-        f"{_user_content(master_resume, job_feedback)}\n\n"
+        f"{system}\n\n"
+        f"{content}\n\n"
         "Output format: reply with ONLY one JSON object (no commentary, no markdown code fences, "
         "no artifact), using straight ASCII double quotes (\"), never curly quotes, "
         f"in exactly this shape:\n{shape}"

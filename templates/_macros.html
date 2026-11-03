@@ -5,7 +5,8 @@
 {%- endmacro %}
 
 {% macro bullets(items) -%}
-{% if items %}<ul>{% for b in items %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+{#- The bullet is a real text character (not a CSS list marker) so ATS parsers see bullet lines. -#}
+{% if items %}<ul>{% for b in items %}<li><span class="bullet">•</span>{{ b }}</li>{% endfor %}</ul>{% endif %}
 {%- endmacro %}
 
 {% macro section(title, cls) -%}

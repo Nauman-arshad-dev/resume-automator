@@ -69,6 +69,38 @@ def set_result(result: dict, usage: str, label: str) -> None:
     st.session_state["result"] = result
     st.session_state["usage"] = usage
     st.session_state["filename"] = main.output_stem(result["resume"], label)
+    st.session_state["history"] = []
+
+
+def apply_revision(result: dict, usage: str) -> None:
+    """Replace the current resume with a revised one, keeping the old one for Undo."""
+    st.session_state.setdefault("history", []).append((st.session_state["result"], st.session_state["usage"]))
+    st.session_state["result"] = result
+    st.session_state["usage"] = usage
+
+
+def undo_revision() -> None:
+    st.session_state["result"], st.session_state["usage"] = st.session_state["history"].pop()
+
+
+def call_api(fn, *args, **kwargs):
+    """Run a Claude API call; returns (value, None) or (None, friendly error message)."""
+    try:
+        return fn(*args, **kwargs), None
+    except main.TailorError as e:
+        return None, str(e)
+    except anthropic.AuthenticationError:
+        return None, "Invalid API key. Check the key in the sidebar."
+    except anthropic.RateLimitError:
+        return None, "Rate limited by the API. Wait a minute and try again."
+    except anthropic.APIStatusError as e:
+        if "credit balance" in str(e.message).lower():
+            return None, ("Your Anthropic API account is out of credits. Add credits at "
+                          "https://console.anthropic.com/settings/billing — or switch to the free "
+                          "Claude.ai subscription mode in the sidebar.")
+        return None, f"API error {e.status_code}: {e.message}"
+    except anthropic.APIConnectionError:
+        return None, "Could not reach the Anthropic API. Check your internet connection."
 
 
 st.set_page_config(page_title="Resume Tailor", page_icon="📄", layout="wide")
@@ -137,7 +169,12 @@ with col_job:
         "Job description", height=250, label_visibility="collapsed",
         placeholder="Paste the job posting and/or ATS feedback, e.g.\n\nMissing keywords: ETL, CI/CD, Airflow",
     ).strip()
-    label = st.text_input("Company / role label (for the file name)", placeholder="Northwind Data Engineer")
+    title_col, label_col = st.columns(2)
+    job_title = title_col.text_input(
+        "Exact job title from the posting", placeholder="Senior Backend Engineer",
+        help="ATS checkers look for the exact title. Claude uses it in your headline if it truthfully fits.",
+    ).strip()
+    label = label_col.text_input("Label for the file name", placeholder="Northwind")
 
 master, read_error = "", None
 try:
@@ -166,7 +203,7 @@ if mode == MODE_FREE:
             "**b.** paste it into a [new Claude chat](https://claude.ai/new) → "
             "**c.** copy Claude's whole reply and paste it below."
         )
-        st.code(main.build_manual_prompt(master, job_text), language=None, height=180)
+        st.code(main.build_manual_prompt(master, job_text, job_title), language=None, height=180)
     else:
         st.info("Add your resume (step 1) and the job description (step 2) to generate the prompt for Claude.ai.")
     reply = st.text_area("Paste Claude's reply here", height=150, placeholder='{"resume": {"name": ...}, ...}')
@@ -185,24 +222,12 @@ else:
             st.error("Paste the job description or ATS feedback.")
         else:
             with st.spinner("Claude is tailoring your resume..."):
-                try:
-                    result, usage = main.tailor_resume(master, job_text, api_key=api_key, model=model_id, effort=effort)
-                    set_result(result, usage, label)
-                except main.TailorError as e:
-                    st.error(str(e))
-                except anthropic.AuthenticationError:
-                    st.error("Invalid API key. Check the key in the sidebar.")
-                except anthropic.RateLimitError:
-                    st.error("Rate limited by the API. Wait a minute and try again.")
-                except anthropic.APIStatusError as e:
-                    if "credit balance" in str(e.message).lower():
-                        st.error("Your Anthropic API account is out of credits. Add credits at "
-                                 "https://console.anthropic.com/settings/billing — or switch to the free "
-                                 "Claude.ai subscription mode in the sidebar.")
-                    else:
-                        st.error(f"API error {e.status_code}: {e.message}")
-                except anthropic.APIConnectionError:
-                    st.error("Could not reach the Anthropic API. Check your internet connection.")
+                out, error = call_api(main.tailor_resume, master, job_text, api_key=api_key,
+                                      model=model_id, effort=effort, job_title=job_title)
+            if error:
+                st.error(error)
+            else:
+                set_result(*out, label)
 
 # --------------------------------------------------------------------------- #
 # 4. Design gallery
@@ -302,3 +327,48 @@ if result:
         st.caption(f"Preview — {len(pages)} page{'s' if len(pages) != 1 else ''}")
         for png in pages:
             st.image(png, width="stretch")
+
+    # ----------------------------------------------------------------------- #
+    # 6. Improve with ATS checker feedback
+    # ----------------------------------------------------------------------- #
+    st.divider()
+    st.subheader("6. Improve with ATS checker feedback")
+    st.caption("Download the PDF, run it through your ATS checker (Jobscan, Resume Worded, Enhancv, …) and "
+               "paste the whole report below. Claude revises the content — length, bullets, keywords, "
+               "summary, job title — without inventing anything. Then pick a design again above.")
+    history = st.session_state.get("history", [])
+    if history:
+        st.button(f"↩️ Undo last revision ({len(history)} so far)", on_click=undo_revision)
+
+    ats_report = st.text_area(
+        "ATS checker report", height=200, key="ats_report",
+        placeholder="Paste everything the checker shows, e.g.\n\nMissing from your resume: gcp, networking, client libraries\n"
+                    "Length (1002 words): aim for 300 to 800 words\nWritten without \"I\" and \"my\": found 6 first-person pronouns",
+    ).strip()
+
+    if mode == MODE_FREE:
+        if ats_report:
+            st.markdown("**a.** Copy this prompt → **b.** paste it into Claude (a [new chat](https://claude.ai/new) "
+                        "is fine) → **c.** paste Claude's whole reply below.")
+            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title),
+                    language=None, height=160)
+        revision_reply = st.text_area("Paste Claude's revised reply here", height=130, key="revision_reply",
+                                      placeholder='{"resume": {"name": ...}, ...}')
+        if st.button("🔁 Update resume from reply", type="primary", width="stretch"):
+            try:
+                apply_revision(main.parse_claude_reply(revision_reply), "Revised from ATS feedback (Claude.ai)")
+                st.rerun()
+            except main.TailorError as e:
+                st.error(str(e))
+    elif st.button("🔁 Revise with Claude", type="primary", width="stretch", disabled=not ats_report):
+        if not api_key:
+            st.error("Add your Anthropic API key in the sidebar.")
+        else:
+            with st.spinner("Claude is revising your resume..."):
+                out, error = call_api(main.revise_resume, master, job_text, resume, ats_report, api_key=api_key,
+                                      model=model_id, effort=effort, job_title=job_title)
+            if error:
+                st.error(error)
+            else:
+                apply_revision(*out)
+                st.rerun()
