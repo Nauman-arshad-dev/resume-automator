@@ -4,35 +4,42 @@ Resume Tailor — local web UI.
 Run from the VS Code terminal:
     .\.venv\Scripts\Activate.ps1
     streamlit run app.py
-Your browser opens at http://localhost:8501. Everything runs on this laptop.
 
-Two ways to run Claude:
-  * Claude.ai subscription (free): the app builds a prompt, you paste it into
-    claude.ai and paste the reply back. Uses your Pro/Max plan, no API credits.
-  * Anthropic API key (automatic): one click, billed per use from API credits.
+Flow: your resume + the job → ✨ Tailor → built-in ATS score → 🚀 Auto-improve →
+pick a design → download. Claude runs through Claude Code (your Claude
+subscription, no copy-paste), the Anthropic API, or copy-paste with claude.ai.
 """
 
 import io
 import json
-import re
+import time
 from pathlib import Path
 
-import anthropic
 import streamlit as st
 
+import ats
+import engines
 import main
 import render
 
-SETTINGS_FILE = Path(__file__).with_name("settings.json")
-MODE_FREE = "Claude.ai subscription (free, copy-paste)"
-MODE_API = "Anthropic API key (automatic, paid)"
-MODELS = {
-    "Claude Sonnet 5.5 (balanced)": "claude-sonnet-5-5",
-    "Claude Haiku 5.5 (cheapest)": "claude-haiku-5-5",
-    "Claude Opus 5.5 (best quality)": "claude-opus-5-5",
+APP_DIR = Path(__file__).parent
+SETTINGS_FILE = APP_DIR / "settings.json"
+MASTER_FILE = APP_DIR / "data" / "master_resume.txt"  # git-ignored
+
+ENGINE_CODE = "Claude Code — your Claude plan (automatic)"
+ENGINE_API = "Anthropic API key (pay per use)"
+ENGINE_MANUAL = "Copy-paste with claude.ai"
+MODELS = {  # label -> (API model id, Claude Code alias)
+    "Sonnet 5.5 · balanced": ("claude-sonnet-5-5", "sonnet"),
+    "Opus 5.5 · best quality": ("claude-opus-5-5", "opus"),
+    "Haiku 5.5 · fastest": ("claude-haiku-5-5", "haiku"),
 }
 EFFORTS = ["low", "medium", "high"]
 
+
+# --------------------------------------------------------------------------- #
+# Persistence
+# --------------------------------------------------------------------------- #
 
 def load_settings() -> dict:
     try:
@@ -41,11 +48,23 @@ def load_settings() -> dict:
         return {}
 
 
-def save_settings(settings: dict) -> None:
-    SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+def load_master() -> str:
+    try:
+        return MASTER_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
-@st.cache_data(show_spinner=False)
+def save_master(text: str) -> None:
+    MASTER_FILE.parent.mkdir(exist_ok=True)
+    MASTER_FILE.write_text(text, encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Cached rendering and scoring
+# --------------------------------------------------------------------------- #
+
+@st.cache_data(show_spinner=False, max_entries=64)
 def make_files(resume_json: str, template: str, accent: str, page: str) -> tuple[bytes, bytes, list[bytes]]:
     resume = json.loads(resume_json)
     pdf = render.build_pdf(resume, template, accent, page)
@@ -54,445 +73,459 @@ def make_files(resume_json: str, template: str, accent: str, page: str) -> tuple
     return pdf, docx.getvalue(), render.pdf_page_images(pdf)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=8)
 def make_gallery(resume_json: str, page: str) -> dict[str, tuple[bytes, int]]:
-    """First-page thumbnail and page count of every design, using the user's resume."""
+    """First-page thumbnail and page count of every design."""
     pdfs = render.build_all_pdfs(json.loads(resume_json), page)
     return {t: (render.pdf_page_images(pdf, scale=0.6, max_pages=1)[0], render.pdf_page_count(pdf))
             for t, pdf in pdfs.items()}
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def ats_check(resume_json: str, template: str, accent: str, page: str, keywords_json: str, job_title: str):
+    pdf, _, _ = make_files(resume_json, template, accent, page)
+    return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title)
+
+
+def as_json(resume: dict) -> str:
+    return json.dumps(resume, ensure_ascii=False, indent=2)
+
+
+# --------------------------------------------------------------------------- #
+# Versions: every tailoring / revision / edit is a new version; Undo pops one
+# --------------------------------------------------------------------------- #
+
+def versions() -> list[dict]:
+    return st.session_state.setdefault("versions", [])
+
+
+def start_versions(result: dict, note: str, company: str) -> None:
+    st.session_state["versions"] = [{"result": result, "note": note, "score": None}]
+    # Keep the job's keywords fixed across versions so scores stay comparable
+    st.session_state["job_keywords"] = result["job_keywords"]
+    st.session_state["filename"] = main.output_stem(result["resume"], company)
+
+
+def add_version(result: dict, note: str, score: int | None = None) -> None:
+    if not st.session_state.get("job_keywords"):
+        st.session_state["job_keywords"] = result["job_keywords"]
+    versions().append({"result": result, "note": note, "score": score})
+
+
+def undo() -> None:
+    if len(versions()) > 1:
+        versions().pop()
 
 
 def pick_template(template_id: str) -> None:
     st.session_state["template"] = template_id
 
 
-def set_result(result: dict, usage: str, label: str) -> None:
-    st.session_state["result"] = result
-    st.session_state["usage"] = usage
-    st.session_state["filename"] = main.output_stem(result["resume"], label)
-    st.session_state["history"] = []
-    st.session_state["rounds"] = []
+# --------------------------------------------------------------------------- #
+# Claude calls
+# --------------------------------------------------------------------------- #
+
+def engine_config() -> dict:
+    api_id, cli_alias = MODELS[model_label]
+    return {"engine": "code" if engine == ENGINE_CODE else "api", "model_cli": cli_alias, "model_api": api_id,
+            "effort": effort, "api_key": api_key, "cli_path": cli_path}
 
 
-def apply_revision(result: dict, usage: str, score: int | None) -> None:
-    """Make a revised resume the new version, keeping the old one (and its ATS score) for Undo."""
-    history = st.session_state.setdefault("history", [])
-    current = st.session_state["result"]
-    st.session_state.setdefault("rounds", []).append({
-        "Version": len(history) + 1,
-        "ATS score": score,
-        "Words": main.word_count(current["resume"]),
-    })
-    history.append((current, st.session_state["usage"]))
-    st.session_state["result"] = result
-    st.session_state["usage"] = usage
-    st.session_state["clear_revision_inputs"] = True
-    st.session_state["revision_notice"] = (
-        f"Version {len(history) + 1} is ready. Download it, check it in your ATS checker, and start the next round."
-    )
+def run_claude(label: str, system: str, content: str):
+    started = time.time()
+    with st.status(label, expanded=False) as status:
+        try:
+            out = engines.run(engine_config(), system, content)
+        except engines.EngineError as e:
+            status.update(label=f"❌ {e}", state="error", expanded=True)
+            return None
+        status.update(label=f"✅ Done in {time.time() - started:.0f}s", state="complete")
+    return out
 
 
-def undo_revision() -> None:
-    st.session_state["result"], st.session_state["usage"] = st.session_state["history"].pop()
-    if st.session_state.get("rounds"):
-        st.session_state["rounds"].pop()
+def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report: str, ctx: dict) -> None:
+    """Check → revise → re-check until the target score, no further gain, or max_rounds."""
+    keywords_json = json.dumps(st.session_state.get("job_keywords", []))
+    view = (ctx["template"], ctx["accent"], ctx["page"])
+    with st.status("🚀 Improving your resume…", expanded=True) as status:
+        for n in range(1, max_rounds + 1):
+            resume = versions()[-1]["result"]["resume"]
+            before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"])
+            first_with_input = n == 1 and bool(confirmed or ext_report)
+            if before.score >= target and not first_with_input:
+                status.write(f"Score {before.score} already meets your target of {target}.")
+                break
+            status.write(f"**Round {n}** — score {before.score}. Claude is revising…")
+            report_text = before.as_text()
+            if ext_report and n == 1:
+                report_text += f"\n\nReport from an external ATS checker:\n{ext_report}"
+            progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(versions()) if v["score"] is not None)
+            try:
+                new, usage = engines.run(engine_config(), *main.revision_request(
+                    ctx["master"], ctx["job_text"], resume, report_text, ctx["job_title"], progress,
+                    confirmed if n == 1 else None))
+            except engines.EngineError as e:
+                status.update(label=f"❌ {e}", state="error")
+                return
+            after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"])
+            if after.score < before.score and not first_with_input:
+                status.write(f"Round {n} would lower the score ({before.score} → {after.score}), so it was discarded.")
+                break
+            add_version(new, f"Auto-improve round {n} · {usage}", after.score)
+            status.write(f"✅ Version {len(versions())}: {before.score} → **{after.score}**")
+            if after.score >= target:
+                break
+            if after.score == before.score:
+                status.write("No further gain from rewording alone — check the missing keywords and checklist.")
+                break
+        final = versions()[-1]["score"]
+        status.update(label=f"Done — ATS score {final}/100 (version {len(versions())})", state="complete",
+                      expanded=False)
+    st.session_state["notice"] = f"Auto-improve finished: ATS score {final}/100 on version {len(versions())}."
+    st.rerun()
 
-
-def call_api(fn, *args, **kwargs):
-    """Run a Claude API call; returns (value, None) or (None, friendly error message)."""
-    try:
-        return fn(*args, **kwargs), None
-    except main.TailorError as e:
-        return None, str(e)
-    except anthropic.AuthenticationError:
-        return None, "Invalid API key. Check the key in the sidebar."
-    except anthropic.RateLimitError:
-        return None, "Rate limited by the API. Wait a minute and try again."
-    except anthropic.APIStatusError as e:
-        if "credit balance" in str(e.message).lower():
-            return None, ("Your Anthropic API account is out of credits. Add credits at "
-                          "https://console.anthropic.com/settings/billing — or switch to the free "
-                          "Claude.ai subscription mode in the sidebar.")
-        return None, f"API error {e.status_code}: {e.message}"
-    except anthropic.APIConnectionError:
-        return None, "Could not reach the Anthropic API. Check your internet connection."
-
-
-st.set_page_config(page_title="Resume Tailor", page_icon="📄", layout="wide")
-saved = load_settings()
 
 # --------------------------------------------------------------------------- #
 # Sidebar: settings
 # --------------------------------------------------------------------------- #
+st.set_page_config(page_title="Resume Tailor", page_icon="📄", layout="wide")
+saved = load_settings()
+cli_path = engines.find_claude_cli()
+
 with st.sidebar:
-    st.header("Settings")
-    mode = st.radio(
-        "How to run Claude", [MODE_FREE, MODE_API],
-        index=1 if saved.get("mode") == MODE_API else 0,
-        help="Free mode uses your Claude.ai Pro/Max plan via copy-paste. "
-             "API mode is one click but needs API credits (billed separately from Claude.ai).",
-    )
+    st.header("⚙️ Settings")
+    engine_options = [ENGINE_CODE, ENGINE_API, ENGINE_MANUAL]
+    default_engine = saved.get("engine") if saved.get("engine") in engine_options else (
+        ENGINE_CODE if cli_path else ENGINE_MANUAL)
+    engine = st.radio("Connect to Claude", engine_options, index=engine_options.index(default_engine))
+    if engine == ENGINE_CODE:
+        if cli_path:
+            st.caption("✅ Claude Code found. Runs on your Claude Pro/Max plan — no API key, no copy-paste.")
+        else:
+            st.error("Claude Code not found. Install it from claude.com/claude-code and sign in once, "
+                     "or pick another option.")
 
     api_key = saved.get("api_key", "")
-    model_id = saved.get("model", MODELS[next(iter(MODELS))])
-    effort = saved.get("effort", "medium")
-    if mode == MODE_API:
-        api_key = st.text_input(
-            "Anthropic API key", value=api_key, type="password", placeholder="sk-ant-...",
-            help="Create one at console.anthropic.com/settings/keys. Needs credits: console.anthropic.com/settings/billing",
-        )
-        model_names = list(MODELS)
-        current = next((n for n, m in MODELS.items() if m == model_id), model_names[0])
-        model_id = MODELS[st.selectbox("Model", model_names, index=model_names.index(current))]
-        effort = st.select_slider("Effort", EFFORTS, value=effort,
-                                  help="Lower effort uses fewer tokens. 'medium' is a good default.")
-    else:
-        st.caption("Uses your Claude.ai plan — no API key or credits needed.")
+    if engine == ENGINE_API:
+        api_key = st.text_input("Anthropic API key", value=api_key, type="password", placeholder="sk-ant-...")
+    model_label = saved.get("model_label") if saved.get("model_label") in MODELS else next(iter(MODELS))
+    effort = saved.get("effort") if saved.get("effort") in EFFORTS else "medium"
+    if engine != ENGINE_MANUAL:
+        model_label = st.selectbox("Model", list(MODELS), index=list(MODELS).index(model_label))
+        effort = st.select_slider("Effort", EFFORTS, value=effort, help="Higher = more careful, slower.")
 
-    out_dir = st.text_input(
-        "Save-to folder (optional)", value=saved.get("out_dir", ""), placeholder=r"G:\My Drive\Resumes",
-        help="E.g. your Google Drive for desktop folder, so saved files sync automatically.",
-    )
-    remember = st.checkbox(
-        "Remember settings on this laptop", value=bool(saved),
-        help=f"Saves to {SETTINGS_FILE.name} in the app folder (plain text, never uploaded).",
-    )
-    settings = {"mode": mode, "api_key": api_key, "model": model_id, "effort": effort, "out_dir": out_dir}
+    out_dir = st.text_input("Save-to folder (optional)", value=saved.get("out_dir", ""),
+                            placeholder=r"G:\My Drive\Resumes", help="E.g. your Google Drive folder.")
+    remember = st.checkbox("Remember settings and my resume on this laptop", value=saved.get("remember", True),
+                           help="Stored in this app's folder only (settings.json, data/). Never uploaded.")
+    settings = {"engine": engine, "api_key": api_key, "model_label": model_label, "effort": effort,
+                "out_dir": out_dir, "remember": remember}
     if remember and settings != saved:
-        save_settings(settings)
-    elif not remember and SETTINGS_FILE.exists():
-        SETTINGS_FILE.unlink()
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    elif not remember:
+        SETTINGS_FILE.unlink(missing_ok=True)
+        MASTER_FILE.unlink(missing_ok=True)
 
 # --------------------------------------------------------------------------- #
-# 1-2. Inputs
+# 1-2. Resume and job
 # --------------------------------------------------------------------------- #
 st.title("📄 Resume Tailor")
-st.caption("Tailor your resume to any job description with Claude — no invented details.")
+st.caption("Your resume + a job → tailored, ATS-checked, nicely designed. Claude never invents experience.")
 
-col_resume, col_job = st.columns(2)
+col_resume, col_job = st.columns(2, gap="large")
 with col_resume:
-    st.subheader("1. Master resume")
-    upload_tab, paste_tab = st.tabs(["Upload file", "Paste text"])
-    with upload_tab:
-        uploaded = st.file_uploader("Resume file", type=["docx", "json", "md", "txt"], label_visibility="collapsed")
-    with paste_tab:
-        pasted = st.text_area("Resume text", height=250, label_visibility="collapsed",
-                              placeholder="Paste your full resume here (used if no file is uploaded)")
-with col_job:
-    st.subheader("2. Job description / ATS feedback")
-    job_text = st.text_area(
-        "Job description", height=250, label_visibility="collapsed",
-        placeholder="Paste the job posting and/or ATS feedback, e.g.\n\nMissing keywords: ETL, CI/CD, Airflow",
-    ).strip()
-    title_col, label_col = st.columns(2)
-    job_title = title_col.text_input(
-        "Exact job title from the posting", placeholder="Senior Backend Engineer",
-        help="ATS checkers look for the exact title. Claude uses it in your headline if it truthfully fits.",
-    ).strip()
-    label = label_col.text_input("Label for the file name", placeholder="Northwind")
-
-master, read_error = "", None
-try:
-    if uploaded is not None:
-        suffix = Path(uploaded.name).suffix
-        if suffix.lower() == ".docx":
-            master = main.docx_to_text(io.BytesIO(uploaded.getvalue()))
-        else:
-            master = main.prepare_master(uploaded.getvalue().decode("utf-8"), suffix)
+    st.subheader("1 · Your resume")
+    saved_master = load_master() if remember else ""
+    master = ""
+    if saved_master and not st.session_state.get("replace_master"):
+        st.success(f"Using your saved resume ({len(saved_master.split())} words).")
+        with st.expander("Show saved resume"):
+            st.text(saved_master[:4000])
+        if st.button("Use a different resume"):
+            st.session_state["replace_master"] = True
+            st.rerun()
+        master = saved_master
     else:
-        master = pasted.strip()
-except Exception as e:  # malformed upload: bad JSON, not UTF-8, corrupt .docx
-    read_error = f"Could not read the resume file: {e}"
+        uploaded = st.file_uploader("Upload your full resume", type=["docx", "json", "md", "txt"])
+        pasted = st.text_area("…or paste it", height=110)
+        try:
+            if uploaded is not None:
+                suffix = Path(uploaded.name).suffix
+                if suffix.lower() == ".docx":
+                    master = main.docx_to_text(io.BytesIO(uploaded.getvalue()))
+                else:
+                    master = main.prepare_master(uploaded.getvalue().decode("utf-8"), suffix)
+            else:
+                master = pasted.strip()
+        except Exception as e:  # malformed upload: bad JSON, not UTF-8, corrupt .docx
+            st.error(f"Could not read the resume file: {e}")
+
+with col_job:
+    st.subheader("2 · The job")
+    job_text = st.text_area("Job description", height=150, placeholder="Paste the full job posting").strip()
+    title_col, company_col = st.columns(2)
+    job_title = title_col.text_input("Exact job title", placeholder="Senior Backend Engineer",
+                                     help="ATS checkers look for the exact title.").strip()
+    company = company_col.text_input("Company", placeholder="Northwind", help="Used in the file name.").strip()
+
+ready = bool(master and job_text)
+
+
+def remember_master() -> None:
+    if remember and master and master != saved_master:
+        save_master(master)
+    st.session_state["replace_master"] = False
+
 
 # --------------------------------------------------------------------------- #
 # 3. Tailor
 # --------------------------------------------------------------------------- #
-st.subheader("3. Tailor with Claude")
-if read_error:
-    st.error(read_error)
-
-if mode == MODE_FREE:
-    if master and job_text:
-        st.markdown(
-            "**a.** Copy the prompt (📋 icon at the top-right of the box) → "
-            "**b.** paste it into a [new Claude chat](https://claude.ai/new) → "
-            "**c.** copy Claude's whole reply and paste it below."
-        )
-        st.code(main.build_manual_prompt(master, job_text, job_title), language=None, height=180)
-    else:
-        st.info("Add your resume (step 1) and the job description (step 2) to generate the prompt for Claude.ai.")
-    reply = st.text_area("Paste Claude's reply here", height=150, placeholder='{"resume": {"name": ...}, ...}')
-    if st.button("✨ Create resume from reply", type="primary", width="stretch"):
-        try:
-            set_result(main.parse_claude_reply(reply), "Created from your Claude.ai reply", label)
-        except main.TailorError as e:
-            st.error(str(e))
-else:
-    if st.button("✨ Tailor resume", type="primary", width="stretch"):
-        if not api_key:
-            st.error("Add your Anthropic API key in the sidebar.")
-        elif not master:
-            st.error("Upload or paste your master resume.")
-        elif not job_text:
-            st.error("Paste the job description or ATS feedback.")
+if engine == ENGINE_MANUAL:
+    with st.expander("✨ Tailor with claude.ai (copy-paste)", expanded=not versions()):
+        if ready:
+            st.markdown("**a.** Copy the prompt (📋 top-right of the box) → **b.** paste it into a "
+                        "[new Claude chat](https://claude.ai/new) → **c.** paste Claude's whole reply below.")
+            st.code(main.build_manual_prompt(master, job_text, job_title), language=None, height=150)
         else:
-            with st.spinner("Claude is tailoring your resume..."):
-                out, error = call_api(main.tailor_resume, master, job_text, api_key=api_key,
-                                      model=model_id, effort=effort, job_title=job_title)
-            if error:
-                st.error(error)
-            else:
-                set_result(*out, label)
+            st.info("Add your resume and the job description first.")
+        reply = st.text_area("Claude's reply", height=110, key="tailor_reply")
+        if st.button("✨ Create my resume", type="primary", width="stretch"):
+            try:
+                start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", company)
+                remember_master()
+                st.rerun()
+            except main.TailorError as e:
+                st.error(str(e))
+else:
+    if st.button("✨ Tailor my resume", type="primary", width="stretch",
+                 disabled=not ready or (engine == ENGINE_CODE and not cli_path),
+                 help=None if ready else "Add your resume and the job description first."):
+        out = run_claude("✍️ Claude is tailoring your resume — usually under a minute…",
+                         *main.tailor_request(master, job_text, job_title))
+        if out:
+            start_versions(out[0], f"Tailored · {out[1]}", company)
+            remember_master()
+            st.rerun()
+
+if not versions():
+    st.stop()
 
 # --------------------------------------------------------------------------- #
-# 4. Design gallery
+# Result: score bar
 # --------------------------------------------------------------------------- #
-result = st.session_state.get("result")
-if result:
-    resume = result["resume"]
-    resume_json = json.dumps(resume, indent=2, ensure_ascii=False)
-    if st.session_state.get("template") not in render.TEMPLATES:
-        st.session_state["template"] = next(iter(render.TEMPLATES))
-    template = st.session_state["template"]
-    meta = render.TEMPLATES[template]
+vs = versions()
+current = vs[-1]
+result = current["result"]
+resume = result["resume"]
+resume_json = as_json(resume)
+job_keywords = st.session_state.get("job_keywords", [])
+if st.session_state.get("template") not in render.TEMPLATES:
+    st.session_state["template"] = next(iter(render.TEMPLATES))
+template = st.session_state["template"]
+meta = render.TEMPLATES[template]
+accent = st.session_state.get(f"accent_{template}") or meta["accent"]
+page = st.session_state.get("page", "A4")
+filename = main.safe_filename(st.session_state.get("filename", "")) or "resume"
+
+try:
+    with st.spinner("Rendering and checking…"):
+        pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
+        report = ats_check(resume_json, template, accent, page, json.dumps(job_keywords), job_title)
+except render.RenderError as e:
+    st.error(str(e))
+    st.stop()
+current["score"] = report.score
+previous = vs[-2]["score"] if len(vs) > 1 else None
+
+st.divider()
+if notice := st.session_state.pop("notice", None):
+    st.success(notice)
+score_col, words_col, version_col, actions_col = st.columns([1, 1, 1, 1.6])
+score_col.metric("ATS score (built-in)", f"{report.score}/100",
+                 delta=None if previous is None else report.score - previous)
+words_col.metric("Words", report.words, help=f"Most checkers want {ats.WORDS_MIN}-{ats.WORDS_MAX}.")
+version_col.metric("Version", f"v{len(vs)}", help=current["note"])
+with actions_col:
+    st.download_button(f"⬇️ Download PDF · {meta['label']}", pdf_bytes, f"{filename}.pdf",
+                       mime="application/pdf", type="primary", width="stretch")
+    if len(vs) > 1:
+        st.button(f"↩️ Undo — back to v{len(vs) - 1}", on_click=undo, width="stretch")
+
+tab_improve, tab_design, tab_edit = st.tabs(["📈 Improve ATS score", "🎨 Design & download", "✏️ Edit text"])
+
+# --------------------------------------------------------------------------- #
+# Tab: Improve
+# --------------------------------------------------------------------------- #
+with tab_improve:
+    checklist_col, keywords_col = st.columns([1.1, 1], gap="large")
+    with checklist_col:
+        for group in ("Structure", "Content", "Job match"):
+            items = [c for c in report.checks if c.group == group]
+            if not items:
+                continue
+            st.markdown(f"**{group}**")
+            for c in items:
+                if c.ok:
+                    st.markdown(f"✅ {c.name}")
+                else:
+                    st.markdown(f"❌ **{c.name}** — {c.detail}  \n"
+                                f"<span style='color:gray;font-size:0.9em'>Fix: {c.fix}</span>",
+                                unsafe_allow_html=True)
+        if not meta["ats"]:
+            st.warning(f"**{meta['label']}** is a design-focused template; for ATS checks switch to an "
+                       "✅ ATS-friendly one in *Design & download*.")
+
+    with keywords_col:
+        st.markdown("**Job keywords**")
+        if job_keywords:
+            tag = lambda k: k.replace("[", "(").replace("]", ")")  # noqa: E731 — keep markdown intact
+            if report.matched:
+                st.markdown(" ".join(f":green-background[{tag(k)}]" for k in report.matched))
+            if report.missing:
+                st.markdown(" ".join(f":red-background[{tag(k)}]" for k in report.missing))
+            st.caption(f"{len(report.matched)} of {len(job_keywords)} found.")
+        else:
+            st.caption("Keyword matching appears after tailoring with a job description.")
+
+        # One-click unlock for keywords Claude couldn't prove from the resume
+        candidates = list(result["keywords_not_added"])
+        known = {k["keyword"].lower() for k in candidates}
+        candidates += [{"keyword": k, "reason": "Not in your resume yet.", "suggestions": []}
+                       for k in report.missing if k.lower() not in known]
+        confirmed = []
+        roles = [j["company"] or j["title"] for j in resume["experience"]] + [p["name"] for p in resume["projects"]]
+        if candidates:
+            with st.expander(f"🔓 Missing keywords you might have ({len(candidates)}) — click the true ones"):
+                st.caption("Claude only adds what your resume proves. If you have done one of these, pick an "
+                           "option and the next round adds it. Leave the rest on Skip.")
+                for i, k in enumerate(candidates):
+                    options = [("skip", None, None)]
+                    options += [(s["level"].lower(), s["where"], s["text"])
+                                for s in k.get("suggestions", []) if s["text"]]
+                    if "basic" not in {o[0] for o in options}:
+                        options.append(("basic", "Skills", k["keyword"]))
+                    if roles:
+                        options.append(("work", None, None))
+
+                    def label(o):
+                        level, where, text = o
+                        return {"skip": "Skip — not true for me",
+                                "basic": f"I know the basics → add “{text}” to Skills",
+                                "work": "I used it at work → pick where"}.get(
+                            level, f"I've done this at {where} → add: “{text}”")
+
+                    st.markdown(f"**{k['keyword']}** <span style='color:gray'>— {k['reason']}</span>",
+                                unsafe_allow_html=True)
+                    level, where, text = st.radio(k["keyword"], options, format_func=label,
+                                                  key=f"kw_{len(vs)}_{i}", label_visibility="collapsed")
+                    if level == "basic":
+                        confirmed.append({"keyword": k["keyword"], "note": f"Skills only (basic level), as: {text}"})
+                    elif level == "work":
+                        role = st.selectbox("Where?", roles, key=f"kw_role_{len(vs)}_{i}")
+                        confirmed.append({"keyword": k["keyword"],
+                                          "note": f"used it at {role}; add it to Skills and one bullet there, kept general"})
+                    elif level != "skip":
+                        confirmed.append({"keyword": k["keyword"], "note": f"used it at {where}; suggested bullet: {text}"})
+                if confirmed:
+                    st.success("Next round adds: " + ", ".join(c["keyword"] for c in confirmed))
 
     st.divider()
-    st.subheader("4. Choose a design")
-    st.caption(st.session_state["usage"])
-    page = st.radio("Page size", list(render.PAGE_SIZES), horizontal=True, key="page")
+    with st.expander("Optional: add a report from an external ATS checker (Jobscan, Resume Worded, …)"):
+        ext_report = st.text_area("Paste the checker's report", height=120, key=f"ext_report_{len(vs)}").strip()
 
+    ctx = {"template": template, "accent": accent, "page": page, "job_title": job_title,
+           "master": master, "job_text": job_text}
+    if engine == ENGINE_MANUAL:
+        st.markdown("**Improve with claude.ai** — copy the prompt → paste into Claude → paste the reply below.")
+        report_text = report.as_text() + (f"\n\nReport from an external ATS checker:\n{ext_report}" if ext_report else "")
+        progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(vs) if v["score"] is not None)
+        st.code(main.build_revision_prompt(master, job_text, resume, report_text, job_title, progress, confirmed),
+                language=None, height=130)
+        reply = st.text_area("Claude's reply", height=100, key=f"revision_reply_{len(vs)}")
+        if st.button(f"🔁 Create version {len(vs) + 1}", type="primary", width="stretch"):
+            try:
+                add_version(main.parse_claude_reply(reply), "Revised with claude.ai")
+                st.rerun()
+            except main.TailorError as e:
+                st.error(str(e))
+    else:
+        go_col, target_col, rounds_col = st.columns([1.4, 1, 1])
+        target = target_col.select_slider("Target score", [70, 75, 80, 85, 90, 95, 100], value=90, key="target")
+        max_rounds = rounds_col.select_slider("Max rounds", [1, 2, 3, 4, 5], value=3, key="max_rounds")
+        go_col.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+        if go_col.button("🚀 Auto-improve", type="primary", width="stretch",
+                         help="Check → Claude revises → re-check, until the target or no further gain."):
+            auto_improve(target, max_rounds, confirmed, ext_report, ctx)
+
+    if len(vs) > 1:
+        st.markdown("**History**")
+        scores = {f"v{i + 1}": v["score"] for i, v in enumerate(vs) if v["score"] is not None}
+        if len(scores) > 1:
+            st.line_chart({"ATS score": scores}, height=160)
+        st.dataframe([{"Version": f"v{i + 1}", "Score": v["score"], "What changed": v["note"]}
+                      for i, v in enumerate(vs)], hide_index=True, width="stretch")
+
+# --------------------------------------------------------------------------- #
+# Tab: Design & download
+# --------------------------------------------------------------------------- #
+with tab_design:
     try:
-        with st.spinner("Rendering all designs with your resume..."):
-            gallery = make_gallery(resume_json, page)
+        with st.spinner("Rendering all designs…"):
+            gallery = make_gallery(as_json(vs[0]["result"]["resume"]), page)  # once per tailoring
     except render.RenderError as e:
         st.error(str(e))
-        st.stop()
-
-    for row_start in range(0, len(render.TEMPLATES), 4):
-        cols = st.columns(4)
-        for col, (tid, info) in zip(cols, list(render.TEMPLATES.items())[row_start:row_start + 4]):
-            thumb, n_pages = gallery[tid]
+        gallery = {}
+    st.caption("Thumbnails show your first draft · the preview on the right is always the current version.")
+    items = list(render.TEMPLATES.items())
+    for row in range(0, len(items), 4):
+        for col, (tid, info) in zip(st.columns(4), items[row:row + 4]):
             with col, st.container(border=True):
-                st.image(thumb, width="stretch")
+                if tid in gallery:
+                    st.image(gallery[tid][0], width="stretch")
                 st.button(("✓ " if tid == template else "") + info["label"], key=f"pick_{tid}",
                           type="primary" if tid == template else "secondary", width="stretch",
                           on_click=pick_template, args=(tid,))
-                st.caption(f"{info['about']} · {n_pages} page{'s' if n_pages != 1 else ''} · "
-                           + ("✅ ATS-friendly" if info["ats"] else "🎨 design-focused"))
+                st.caption(f"{info['about']} · " + ("✅ ATS-friendly" if info["ats"] else "🎨 design-focused"))
 
-    # ----------------------------------------------------------------------- #
-    # 5. Customize, preview, download
-    # ----------------------------------------------------------------------- #
     st.divider()
-    st.subheader(f"5. Customize & download — {meta['label']}")
     controls, preview = st.columns([1, 1.5], gap="large")
     with controls:
-        accent = st.color_picker("Accent color", meta["accent"], key=f"accent_{template}")
-        filename = main.safe_filename(st.text_input("File name", key="filename")) or "resume"
-
-        try:
-            with st.spinner("Rendering..."):
-                pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
-        except render.RenderError as e:
-            st.error(str(e))
-            st.stop()
-
+        st.markdown(f"**{meta['label']}**")
+        st.color_picker("Accent color", meta["accent"], key=f"accent_{template}")
+        st.radio("Page size", list(render.PAGE_SIZES), horizontal=True, key="page")
+        st.text_input("File name", key="filename")
         st.download_button("⬇️ Download PDF", pdf_bytes, f"{filename}.pdf", mime="application/pdf",
-                           type="primary", width="stretch")
+                           type="primary", width="stretch", key="dl_pdf")
         st.download_button("⬇️ Download Word (.docx)", docx_bytes, f"{filename}.docx",
                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                            width="stretch")
         st.download_button("⬇️ Download .json (reuse as master resume)", resume_json, f"{filename}.json",
                            mime="application/json", width="stretch")
-        st.caption("The Word file is a simplified single-column version of this design, for easy editing.")
-        if not meta["ats"]:
-            st.info("Multi-column designs look great to recruiters, but some applicant tracking systems "
-                    "read them less reliably. For online application portals, an ✅ ATS-friendly design is safer.")
+        st.caption("The Word file is a simplified single-column version of the design, for easy editing.")
         if out_dir and st.button(f"💾 Save PDF + Word to {out_dir}", width="stretch"):
             try:
                 folder = Path(out_dir)
                 folder.mkdir(parents=True, exist_ok=True)
                 (folder / f"{filename}.pdf").write_bytes(pdf_bytes)
                 (folder / f"{filename}.docx").write_bytes(docx_bytes)
-                st.success(f"Saved {filename}.pdf and .docx to {folder}")
+                st.success(f"Saved to {folder}")
             except OSError as e:
                 st.warning(f"Could not save to {out_dir}: {e}")
-
-        st.markdown("**✅ Keywords added**")
-        if result["keywords_added"]:
-            st.dataframe(result["keywords_added"], width="stretch", hide_index=True)
-        else:
-            st.caption("None")
-        st.markdown("**⚠️ Not added** — no supporting experience; add yourself only if true")
-        if result["keywords_not_added"]:
-            st.dataframe([{"keyword": k["keyword"], "reason": k["reason"]} for k in result["keywords_not_added"]],
-                         width="stretch", hide_index=True)
-        else:
-            st.caption("None")
-
-        with st.expander("✏️ Edit resume text"):
-            edited = st.text_area("Resume JSON", resume_json, height=320, label_visibility="collapsed")
-            if st.button("Apply edits", width="stretch"):
-                try:
-                    st.session_state["result"]["resume"] = main.parse_claude_reply(edited)["resume"]
-                    st.rerun()
-                except main.TailorError as e:
-                    st.error(str(e))
-
     with preview:
         st.caption(f"Preview — {len(pages)} page{'s' if len(pages) != 1 else ''}")
         for png in pages:
             st.image(png, width="stretch")
 
-    # ----------------------------------------------------------------------- #
-    # 6. Improve with ATS checker feedback — repeatable rounds
-    # ----------------------------------------------------------------------- #
-    st.divider()
-    st.subheader("6. Raise your ATS score — round by round")
-    history = st.session_state.get("history", [])
-    rounds = st.session_state.get("rounds", [])
-    version = len(history) + 1
-    words = main.word_count(resume)
-
-    # Clear last round's inputs (must happen before the widgets are created)
-    if st.session_state.pop("clear_revision_inputs", False):
-        for key in ("ats_report", "revision_reply", "ats_score"):
-            st.session_state.pop(key, None)
-    if notice := st.session_state.pop("revision_notice", None):
-        st.success(notice)
-
-    # Score progress
-    if rounds:
-        progress = rounds + [{"Version": version, "ATS score": None, "Words": words}]
-        table_col, chart_col = st.columns([1, 1.4])
-        table_col.dataframe(
-            [{**r, "ATS score": f"{r['ATS score']}%" if r["ATS score"] is not None else "not checked yet"}
-             for r in progress],
-            hide_index=True, width="stretch",
-        )
-        scored = [r for r in rounds if r["ATS score"] is not None]
-        if len(scored) >= 2:
-            chart_col.line_chart({"ATS score": {f"v{r['Version']}": r["ATS score"] for r in scored}}, height=180)
-        best = max(scored, key=lambda r: r["ATS score"], default=None)
-        if best and best["Version"] != version - 1 and best["ATS score"] > scored[-1]["ATS score"]:
-            st.warning(f"Version {best['Version']} scored higher ({best['ATS score']}%) than the latest checked "
-                       f"version. If the last round made things worse, click ↩️ Undo until you're back on "
-                       f"version {best['Version']}.")
-
-    st.markdown(
-        f"**Round {version}** — current resume: **version {version}**, {words} words\n\n"
-        f"1. Download version {version} below (use an ✅ ATS-friendly design for ATS checks)\n"
-        f"2. Upload it to your ATS checker\n"
-        f"3. Enter the score and paste the full report here, then let Claude create version {version + 1}"
-    )
-    if not meta["ats"]:
-        st.warning(f"**{meta['label']}** is a design-focused template, so some checkers will flag its layout no "
-                   "matter what the content says. For ATS rounds, pick an ✅ ATS-friendly design in step 4.")
-
-    d1, d2 = st.columns(2)
-    d1.download_button(f"⬇️ Download version {version} (PDF)", pdf_bytes, f"{filename}.pdf",
-                       mime="application/pdf", width="stretch", key="round_download")
-    if history:
-        d2.button(f"↩️ Undo — back to version {version - 1}", on_click=undo_revision, width="stretch")
-
-    score_col, _ = st.columns([1, 3])
-    ats_score = score_col.number_input(f"ATS score for version {version} (%)", min_value=0, max_value=100,
-                                       value=None, step=1, key="ats_score", placeholder="e.g. 72")
-    if ats_score == 100:
-        st.balloons()
-        st.success("100% — this version is ready to send. 🎉")
-    ats_report = st.text_area(
-        f"ATS checker report for version {version}", height=200, key="ats_report",
-        placeholder="Paste everything the checker shows, e.g.\n\nMissing from your resume: gcp, networking, client libraries\n"
-                    "Length (1002 words): aim for 300 to 800 words\nWritten without \"I\" and \"my\": found 6 first-person pronouns",
-    ).strip()
-    # Keywords Claude couldn't prove from the resume: let the candidate confirm the true ones
-    not_added = result["keywords_not_added"]
-    confirmed = []
-    roles = [j["company"] or j["title"] for j in resume["experience"]] + [p["name"] for p in resume["projects"]]
-    with st.expander(f"🔓 Unlock missing keywords — click the ones that are true for you "
-                     f"({len(not_added)} not added yet)", expanded=bool(not_added)):
-        st.caption("Claude only adds keywords your resume proves, so the score stalls when the checker wants words "
-                   "your resume doesn't use yet. For each one you **have** done, click how well you know it — the "
-                   "next version adds it. Leave the rest on Skip: recruiters ask about listed skills in interviews.")
-        for i, k in enumerate(not_added):
-            # Options: Skip, Claude's suggestions, then built-in fallbacks for any level Claude didn't cover
-            options = [("skip", None, None)]
-            options += [(s["level"].lower(), s["where"], s["text"]) for s in k.get("suggestions", []) if s["text"]]
-            levels = {o[0] for o in options}
-            if "basic" not in levels:
-                options.append(("basic", "Skills", k["keyword"]))
-            options.append(("work", None, None))  # "I used it at work" + pick the role
-
-            def label(o, kw=k["keyword"]):
-                level, where, text = o
-                if level == "skip":
-                    return "Skip — not true for me"
-                if level == "basic":
-                    return f"I know the basics → add “{text}” to Skills"
-                if level == "work":
-                    return "I used it at work → pick where"
-                return f"I've done this at {where} → add: “{text}”"
-
-            with st.container(border=True):
-                st.markdown(f"**{k['keyword']}** — <span style='color:gray'>{k['reason']}</span>",
-                            unsafe_allow_html=True)
-                choice = st.radio(k["keyword"], options, format_func=label, key=f"kw_{version}_{i}",
-                                  label_visibility="collapsed")
-                level, where, text = choice
-                if level == "basic":
-                    confirmed.append({"keyword": k["keyword"], "note": f"Skills only (basic level), as: {text}"})
-                elif level == "work" and roles:
-                    role = st.selectbox("Where did you use it?", roles, key=f"kw_role_{version}_{i}")
-                    confirmed.append({"keyword": k["keyword"],
-                                      "note": f"used it at {role}; add it to Skills and one bullet there, kept general"})
-                elif level not in ("skip", "work"):
-                    confirmed.append({"keyword": k["keyword"],
-                                      "note": f"used it at {where}; suggested bullet: {text}"})
-        extra = st.text_area(
-            "Optional: other missing keywords from the report that are true for you — one per line: keyword — where/how",
-            key=f"kw_extra_{version}", height=70,
-            placeholder="storage server — MinIO for file storage in Tracio",
-        )
-        for line in extra.splitlines():
-            parts = re.split(r"\s+[—–-]\s+|:\s+", line.strip(), maxsplit=1)  # "keyword — note" or "keyword: note"
-            if parts[0]:
-                confirmed.append({"keyword": parts[0], "note": parts[1].strip() if len(parts) > 1 else ""})
-        if confirmed:
-            st.success(f"{len(confirmed)} keyword(s) will be added in version {version + 1}: "
-                       + ", ".join(c["keyword"] for c in confirmed))
-
-    progress_note = ", ".join(f"v{r['Version']}: {r['ATS score']}%" for r in rounds if r["ATS score"] is not None)
-    if ats_score is not None:
-        progress_note = ", ".join(x for x in (progress_note, f"v{version} (this report): {ats_score}%") if x)
-
-    if mode == MODE_FREE:
-        if ats_report:
-            st.markdown("**a.** Copy this prompt → **b.** paste it into Claude (a [new chat](https://claude.ai/new) "
-                        "is fine) → **c.** paste Claude's whole reply below.")
-            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title, progress_note,
-                                               confirmed), language=None, height=160)
-        revision_reply = st.text_area("Paste Claude's revised reply here", height=130, key="revision_reply",
-                                      placeholder='{"resume": {"name": ...}, ...}')
-        if st.button(f"🔁 Create version {version + 1} from reply", type="primary", width="stretch"):
-            try:
-                apply_revision(main.parse_claude_reply(revision_reply),
-                               f"Version {version + 1}: revised from ATS feedback (Claude.ai)", ats_score)
-                st.rerun()
-            except main.TailorError as e:
-                st.error(str(e))
-    elif st.button(f"🔁 Revise with Claude → version {version + 1}", type="primary", width="stretch",
-                   disabled=not ats_report):
-        if not api_key:
-            st.error("Add your Anthropic API key in the sidebar.")
-        else:
-            with st.spinner("Claude is revising your resume..."):
-                out, error = call_api(main.revise_resume, master, job_text, resume, ats_report, api_key=api_key,
-                                      model=model_id, effort=effort, job_title=job_title, progress=progress_note,
-                                      confirmed=confirmed)
-            if error:
-                st.error(error)
-            else:
-                result_v, usage_v = out
-                apply_revision(result_v, f"Version {version + 1}: {usage_v}", ats_score)
-                st.rerun()
+# --------------------------------------------------------------------------- #
+# Tab: Edit
+# --------------------------------------------------------------------------- #
+with tab_edit:
+    st.caption("Change any wording, then Apply. Your edit becomes a new version; Undo restores the previous one.")
+    edited = st.text_area("Resume (JSON)", resume_json, height=420, key=f"edit_{len(vs)}",
+                          label_visibility="collapsed")
+    if st.button("Apply edits", width="stretch"):
+        try:
+            add_version({**result, "resume": main.parse_claude_reply(edited)["resume"]}, "Edited by hand")
+            st.rerun()
+        except main.TailorError as e:
+            st.error(str(e))

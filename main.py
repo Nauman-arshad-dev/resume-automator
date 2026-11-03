@@ -96,6 +96,7 @@ RESUME_SCHEMA = _obj({
 
 RESPONSE_SCHEMA = _obj({
     "resume": RESUME_SCHEMA,
+    "job_keywords": _STR_LIST,  # key terms of the job posting, used by the built-in ATS check
     "keywords_added": {"type": "array", "items": _obj({
         "keyword": _STR,
         "where": _STR,
@@ -126,6 +127,7 @@ TAILOR_RULES = """Rules:
 - skills: plain-text entries; group related tools as "Category: tool, tool, tool".
 - Use empty strings or empty lists for fields the master resume does not have.
 - In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2").
+- job_keywords: the 15-30 most important keywords an ATS would scan this job posting for (hard skills, tools, platforms, methods, certifications, key soft skills), each 1-3 words in the posting's own wording. Skip generic words like "team" or "experience". If no job description is given, return an empty list.
 - For each keywords_not_added item, give 1-3 suggestions the candidate can pick with one click IF it is true for them: one with level "basic" (where "Skills", text = the Skills entry, e.g. "GCP (basics)"), and, when an existing role or project plausibly involved it, one or two with level "experienced" (where = that role's company or project name, text = a ready-to-use bullet for that entry, consistent with what the resume says about it, with no invented metrics). The candidate decides what is true; these are options, not claims."""
 
 SYSTEM_PROMPT = f"""You are an expert resume writer who tailors resumes for ATS systems and human recruiters.
@@ -145,6 +147,7 @@ Revision rules:
 - If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
 - keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you could not add honestly.
 - Keep everything else from the current resume that the report does not flag.
+- job_keywords: return the list from the current resume's job unchanged if the report lists job keywords; otherwise extract it from the job description.
 - candidate_confirmed_keywords (if given) are skills the candidate personally confirms are true, with a note on where or how they used them. Treat them as facts from the master resume and add every one of them: if the note says "Skills only", add it only to Skills; if the note gives a suggested bullet for a role or project, add that bullet (lightly edited to fit) to that entry; if the note names a role or project, also word it naturally into one of that entry's bullets (or a new bullet there), and add it to Skills. Use the keyword's exact wording from the ATS report. Do not invent metrics, tools or details beyond the note, and do not list them under keywords_not_added.
 - This may be one of several rounds. If a score_history is given and the score dropped after the last round, undo that kind of change instead of pushing further in the same direction.
 
@@ -281,6 +284,18 @@ def _skeleton(schema: dict):
     if schema["type"] == "array":
         return [_skeleton(schema["items"])]
     return ""
+
+
+def tailor_request(master_resume: str, job_feedback: str, job_title: str = "") -> tuple[str, str]:
+    """(system prompt, user content) for tailoring — for engines.run()."""
+    return SYSTEM_PROMPT, _user_content(master_resume, job_feedback, job_title)
+
+
+def revision_request(master_resume: str, job_feedback: str, resume: dict, ats_report: str, job_title: str = "",
+                     progress: str = "", confirmed: list[dict] | None = None) -> tuple[str, str]:
+    """(system prompt, user content) for one ATS revision round — for engines.run()."""
+    return REVISION_PROMPT, _revision_content(master_resume, job_feedback, job_title, resume, ats_report,
+                                              progress, confirmed)
 
 
 def build_manual_prompt(master_resume: str, job_feedback: str, job_title: str = "") -> str:
@@ -461,11 +476,20 @@ def main() -> None:
     parser.add_argument("--label", default="", help="Label for the output file name, e.g. the company")
     parser.add_argument("--template", default="classic", choices=list(render.TEMPLATES), help="Resume template")
     parser.add_argument("--page", default="A4", choices=list(render.PAGE_SIZES), help="Page size")
+    parser.add_argument("--title", default="", help="Exact job title from the posting")
+    parser.add_argument("--engine", default="auto", choices=["auto", "claude-code", "api"],
+                        help="claude-code = your Claude subscription via Claude Code; api = ANTHROPIC_API_KEY "
+                             "(auto: Claude Code if installed, else the API)")
     args = parser.parse_args()
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    import engines  # imports this module, so import lazily
+
+    engine = args.engine
+    if engine == "auto":
+        engine = "claude-code" if engines.find_claude_cli() else "api"
+    if engine == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit('ANTHROPIC_API_KEY is not set. In PowerShell: $env:ANTHROPIC_API_KEY = "sk-ant-..."\n'
-                 "No API credits? Use the free copy-paste mode in the web UI: streamlit run app.py")
+                 "Or install Claude Code and use your Claude subscription: --engine claude-code")
 
     resume_path, job_path = Path(args.resume), Path(args.job)
     for p in (resume_path, job_path):
@@ -478,19 +502,13 @@ def main() -> None:
         sys.exit(f"{job_path} is empty. Paste the job description and/or ATS feedback into it.")
 
     print(f"Tailoring {resume_path.name} against {job_path.name} ...")
+    config = {"engine": "code" if engine == "claude-code" else "api", "model_cli": "sonnet", "model_api": MODEL,
+              "effort": EFFORT, "api_key": os.environ.get("ANTHROPIC_API_KEY")}
     try:
-        result, usage = tailor_resume(master, job)
+        result, usage = engines.run(config, *tailor_request(master, job, args.title))
         print(usage)
-    except TailorError as e:
+    except engines.EngineError as e:
         sys.exit(str(e))
-    except anthropic.AuthenticationError:
-        sys.exit("Invalid API key. Check ANTHROPIC_API_KEY.")
-    except anthropic.RateLimitError:
-        sys.exit("Rate limited by the API. Wait a minute and try again.")
-    except anthropic.APIStatusError as e:
-        sys.exit(f"API error {e.status_code}: {e.message}")
-    except anthropic.APIConnectionError:
-        sys.exit("Could not reach the Anthropic API. Check your internet connection.")
 
     resume = result["resume"]
     out_dir = Path(args.out_dir)
