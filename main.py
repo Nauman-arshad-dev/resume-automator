@@ -138,6 +138,7 @@ Revision rules:
 - If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
 - keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you could not add honestly.
 - Keep everything else from the current resume that the report does not flag.
+- This may be one of several rounds. If a score_history is given and the score dropped after the last round, undo that kind of change instead of pushing further in the same direction.
 
 These tailoring rules still apply:
 {TAILOR_RULES}"""
@@ -160,15 +161,18 @@ def _user_content(master_resume: str, job_feedback: str, job_title: str = "") ->
     )
 
 
-def _revision_content(master_resume: str, job_feedback: str, job_title: str, resume: dict, ats_report: str) -> str:
+def _revision_content(master_resume: str, job_feedback: str, job_title: str, resume: dict, ats_report: str,
+                      progress: str = "") -> str:
     master = master_resume or "(not provided: treat the current resume as the source of facts)"
     current = json.dumps(resume, ensure_ascii=False, separators=(",", ":"))
+    history = f"<score_history>{progress}</score_history>\n\n" if progress else ""
     return (
         f"<master_resume>\n{master}\n</master_resume>\n\n"
         f"<job_description>\n{job_feedback or '(not provided)'}\n</job_description>\n\n"
         f"{_title_block(job_title)}"
         f"<current_resume>\n{current}\n</current_resume>\n\n"
         f"<ats_report>\n{ats_report}\n</ats_report>\n\n"
+        f"{history}"
         "Revise the resume to fix the issues in the ATS report, following the rules."
     )
 
@@ -215,9 +219,10 @@ def revise_resume(
     model: str = MODEL,
     effort: str = EFFORT,
     job_title: str = "",
+    progress: str = "",
 ) -> tuple[dict, str]:
-    """Revise an already-tailored resume using an ATS checker report."""
-    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report)
+    """Revise an already-tailored resume using an ATS checker report (progress: e.g. "v1: 62%, v2: 78%")."""
+    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress)
     return _call_claude(REVISION_PROMPT, content, api_key, model, effort)
 
 
@@ -268,9 +273,10 @@ def build_manual_prompt(master_resume: str, job_feedback: str, job_title: str = 
 
 
 def build_revision_prompt(master_resume: str, job_feedback: str, resume: dict, ats_report: str,
-                          job_title: str = "") -> str:
+                          job_title: str = "", progress: str = "") -> str:
     """Copy-paste version of revise_resume()."""
-    return _manual_prompt(REVISION_PROMPT, _revision_content(master_resume, job_feedback, job_title, resume, ats_report))
+    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress)
+    return _manual_prompt(REVISION_PROMPT, content)
 
 
 def _manual_prompt(system: str, content: str) -> str:
@@ -408,6 +414,17 @@ def _slug(text: str) -> str:
 def output_stem(resume: dict, label: str = "") -> str:
     parts = (_slug(resume["name"]), _slug(label) if label else "", date.today().isoformat())
     return "_".join(x for x in parts if x)
+
+
+def word_count(resume: dict) -> int:
+    """Words in every text field, roughly what an ATS checker counts."""
+    def walk(value) -> int:
+        if isinstance(value, dict):
+            return sum(walk(v) for v in value.values())
+        if isinstance(value, list):
+            return sum(walk(v) for v in value)
+        return len(str(value).split())
+    return walk(resume)
 
 
 def safe_filename(name: str) -> str:

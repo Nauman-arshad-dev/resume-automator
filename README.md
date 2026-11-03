@@ -17,7 +17,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 - ✅ **8 professional resume templates**: each one is a fully different layout. Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold. You can see all of them with **your own resume** in a visual gallery, then customize the accent color and page size (A4 / US Letter).
 - ✅ **Download as PDF or Word**: rename the file before you download it.
 - ✅ **ATS-friendly output**: single column, standard fonts, no tables or graphics.
-- ✅ **ATS checker feedback loop**: paste the report from Jobscan, Resume Worded or any ATS checker, and Claude revises the content to fix length, bullets, pronouns, buzzwords, job title and missing keywords. One-click undo.
+- ✅ **Raise your ATS score round by round**: paste the report from Jobscan, Resume Worded or any ATS checker, and Claude creates the next version, fixing length, bullets, pronouns, buzzwords, job title and missing keywords. Enter each round's score to get a progress table and chart. The app warns you if a round made the score worse, and Undo takes you back to any earlier version.
 - ✅ **Edit before download**: fix any line in the app and the preview updates instantly.
 - ✅ **Google Drive / Google Docs sync**: save straight into your Google Drive for desktop folder.
 - ✅ **Low token cost**: one request, compact input, adjustable model and effort.
@@ -29,7 +29,7 @@ Applicant Tracking Systems (ATS) filter out resumes that don't match the job des
 2. Paste the **job description** and/or the **ATS report's missing keywords**.
 3. Let Claude tailor it. In **free mode**, copy the generated prompt into [claude.ai](https://claude.ai/new) and paste the reply back. In **API mode**, just click **Tailor resume**. Either way, Claude rewrites the summary, reorders the skills and rephrases bullets to match the role, using only facts from your resume.
 4. Pick a **design** from the gallery, check the **live preview**, review the keywords that were added or skipped, and download a **PDF** or **Word** resume.
-5. Run the PDF through an **ATS checker**, paste its report into the app, and let Claude **revise** the resume. Repeat until the score is where you want it.
+5. Run the PDF through an **ATS checker**, enter the score, paste its report, and let Claude create the next version. Download it, check it again, and repeat. The app tracks each version's score so you can see it climb.
 
 ## Quick start
 

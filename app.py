@@ -70,17 +70,31 @@ def set_result(result: dict, usage: str, label: str) -> None:
     st.session_state["usage"] = usage
     st.session_state["filename"] = main.output_stem(result["resume"], label)
     st.session_state["history"] = []
+    st.session_state["rounds"] = []
 
 
-def apply_revision(result: dict, usage: str) -> None:
-    """Replace the current resume with a revised one, keeping the old one for Undo."""
-    st.session_state.setdefault("history", []).append((st.session_state["result"], st.session_state["usage"]))
+def apply_revision(result: dict, usage: str, score: int | None) -> None:
+    """Make a revised resume the new version, keeping the old one (and its ATS score) for Undo."""
+    history = st.session_state.setdefault("history", [])
+    current = st.session_state["result"]
+    st.session_state.setdefault("rounds", []).append({
+        "Version": len(history) + 1,
+        "ATS score": score,
+        "Words": main.word_count(current["resume"]),
+    })
+    history.append((current, st.session_state["usage"]))
     st.session_state["result"] = result
     st.session_state["usage"] = usage
+    st.session_state["clear_revision_inputs"] = True
+    st.session_state["revision_notice"] = (
+        f"Version {len(history) + 1} is ready. Download it, check it in your ATS checker, and start the next round."
+    )
 
 
 def undo_revision() -> None:
     st.session_state["result"], st.session_state["usage"] = st.session_state["history"].pop()
+    if st.session_state.get("rounds"):
+        st.session_state["rounds"].pop()
 
 
 def call_api(fn, *args, **kwargs):
@@ -329,46 +343,100 @@ if result:
             st.image(png, width="stretch")
 
     # ----------------------------------------------------------------------- #
-    # 6. Improve with ATS checker feedback
+    # 6. Improve with ATS checker feedback — repeatable rounds
     # ----------------------------------------------------------------------- #
     st.divider()
-    st.subheader("6. Improve with ATS checker feedback")
-    st.caption("Download the PDF, run it through your ATS checker (Jobscan, Resume Worded, Enhancv, …) and "
-               "paste the whole report below. Claude revises the content — length, bullets, keywords, "
-               "summary, job title — without inventing anything. Then pick a design again above.")
+    st.subheader("6. Raise your ATS score — round by round")
     history = st.session_state.get("history", [])
-    if history:
-        st.button(f"↩️ Undo last revision ({len(history)} so far)", on_click=undo_revision)
+    rounds = st.session_state.get("rounds", [])
+    version = len(history) + 1
+    words = main.word_count(resume)
 
+    # Clear last round's inputs (must happen before the widgets are created)
+    if st.session_state.pop("clear_revision_inputs", False):
+        for key in ("ats_report", "revision_reply", "ats_score"):
+            st.session_state.pop(key, None)
+    if notice := st.session_state.pop("revision_notice", None):
+        st.success(notice)
+
+    # Score progress
+    if rounds:
+        progress = rounds + [{"Version": version, "ATS score": None, "Words": words}]
+        table_col, chart_col = st.columns([1, 1.4])
+        table_col.dataframe(
+            [{**r, "ATS score": f"{r['ATS score']}%" if r["ATS score"] is not None else "not checked yet"}
+             for r in progress],
+            hide_index=True, width="stretch",
+        )
+        scored = [r for r in rounds if r["ATS score"] is not None]
+        if len(scored) >= 2:
+            chart_col.line_chart({"ATS score": {f"v{r['Version']}": r["ATS score"] for r in scored}}, height=180)
+        best = max(scored, key=lambda r: r["ATS score"], default=None)
+        if best and best["Version"] != version - 1 and best["ATS score"] > scored[-1]["ATS score"]:
+            st.warning(f"Version {best['Version']} scored higher ({best['ATS score']}%) than the latest checked "
+                       f"version. If the last round made things worse, click ↩️ Undo until you're back on "
+                       f"version {best['Version']}.")
+
+    st.markdown(
+        f"**Round {version}** — current resume: **version {version}**, {words} words\n\n"
+        f"1. Download version {version} below (use an ✅ ATS-friendly design for ATS checks)\n"
+        f"2. Upload it to your ATS checker\n"
+        f"3. Enter the score and paste the full report here, then let Claude create version {version + 1}"
+    )
+    if not meta["ats"]:
+        st.warning(f"**{meta['label']}** is a design-focused template, so some checkers will flag its layout no "
+                   "matter what the content says. For ATS rounds, pick an ✅ ATS-friendly design in step 4.")
+
+    d1, d2 = st.columns(2)
+    d1.download_button(f"⬇️ Download version {version} (PDF)", pdf_bytes, f"{filename}.pdf",
+                       mime="application/pdf", width="stretch", key="round_download")
+    if history:
+        d2.button(f"↩️ Undo — back to version {version - 1}", on_click=undo_revision, width="stretch")
+
+    score_col, _ = st.columns([1, 3])
+    ats_score = score_col.number_input(f"ATS score for version {version} (%)", min_value=0, max_value=100,
+                                       value=None, step=1, key="ats_score", placeholder="e.g. 72")
+    if ats_score == 100:
+        st.balloons()
+        st.success("100% — this version is ready to send. 🎉")
     ats_report = st.text_area(
-        "ATS checker report", height=200, key="ats_report",
+        f"ATS checker report for version {version}", height=200, key="ats_report",
         placeholder="Paste everything the checker shows, e.g.\n\nMissing from your resume: gcp, networking, client libraries\n"
                     "Length (1002 words): aim for 300 to 800 words\nWritten without \"I\" and \"my\": found 6 first-person pronouns",
     ).strip()
+    st.caption("Claude fixes everything it truthfully can. Keywords for skills you don't have stay under "
+               "\"Not added\" — a checker may never reach 100% without them, and that's the honest ceiling.")
+
+    progress_note = ", ".join(f"v{r['Version']}: {r['ATS score']}%" for r in rounds if r["ATS score"] is not None)
+    if ats_score is not None:
+        progress_note = ", ".join(x for x in (progress_note, f"v{version} (this report): {ats_score}%") if x)
 
     if mode == MODE_FREE:
         if ats_report:
             st.markdown("**a.** Copy this prompt → **b.** paste it into Claude (a [new chat](https://claude.ai/new) "
                         "is fine) → **c.** paste Claude's whole reply below.")
-            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title),
+            st.code(main.build_revision_prompt(master, job_text, resume, ats_report, job_title, progress_note),
                     language=None, height=160)
         revision_reply = st.text_area("Paste Claude's revised reply here", height=130, key="revision_reply",
                                       placeholder='{"resume": {"name": ...}, ...}')
-        if st.button("🔁 Update resume from reply", type="primary", width="stretch"):
+        if st.button(f"🔁 Create version {version + 1} from reply", type="primary", width="stretch"):
             try:
-                apply_revision(main.parse_claude_reply(revision_reply), "Revised from ATS feedback (Claude.ai)")
+                apply_revision(main.parse_claude_reply(revision_reply),
+                               f"Version {version + 1}: revised from ATS feedback (Claude.ai)", ats_score)
                 st.rerun()
             except main.TailorError as e:
                 st.error(str(e))
-    elif st.button("🔁 Revise with Claude", type="primary", width="stretch", disabled=not ats_report):
+    elif st.button(f"🔁 Revise with Claude → version {version + 1}", type="primary", width="stretch",
+                   disabled=not ats_report):
         if not api_key:
             st.error("Add your Anthropic API key in the sidebar.")
         else:
             with st.spinner("Claude is revising your resume..."):
                 out, error = call_api(main.revise_resume, master, job_text, resume, ats_report, api_key=api_key,
-                                      model=model_id, effort=effort, job_title=job_title)
+                                      model=model_id, effort=effort, job_title=job_title, progress=progress_note)
             if error:
                 st.error(error)
             else:
-                apply_revision(*out)
+                result_v, usage_v = out
+                apply_revision(result_v, f"Version {version + 1}: {usage_v}", ats_score)
                 st.rerun()
