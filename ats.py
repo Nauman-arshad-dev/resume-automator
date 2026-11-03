@@ -73,7 +73,8 @@ def pdf_text(pdf_bytes: bytes) -> str:
     """The PDF's text as an ATS parser would read it: one line per baseline, split at column gaps.
 
     Built from character positions rather than pdfium's own line heuristics, which
-    sometimes glue a heading to the line below it.
+    sometimes glue a heading to the line below it. Uses pdfium's "loose" boxes (the
+    font's full line height), so @, g, digits and hyphens on one line share a center.
     """
     doc = pdfium.PdfDocument(pdf_bytes)
     lines: list[str] = []
@@ -83,9 +84,15 @@ def pdf_text(pdf_bytes: bytes) -> str:
             chars = []
             for k in range(textpage.count_chars()):
                 ch = textpage.get_text_range(k, 1)
-                if ch and ch not in "\r\n":
-                    left, bottom, right, top = textpage.get_charbox(k)
-                    chars.append((ch, left, bottom, right, max(top - bottom, 1.0)))
+                if not ch or ch in "\r\n￾﻿\x02":
+                    continue
+                if ch.isspace():  # pdfium's generated spaces have no real box: sit after the previous char
+                    if chars and not chars[-1][0].isspace():
+                        _, _, center, right, height = chars[-1]
+                        chars.append((" ", right, center, right, height))
+                    continue
+                left, bottom, right, top = textpage.get_charbox(k, loose=True)
+                chars.append((ch, left, (top + bottom) / 2, right, max(top - bottom, 1.0)))
             lines += _lines_from_chars(chars)
     finally:
         doc.close()
@@ -93,21 +100,24 @@ def pdf_text(pdf_bytes: bytes) -> str:
 
 
 def _lines_from_chars(chars: list[tuple]) -> list[str]:
-    rows: list[list] = []  # [baseline, height, chars]
+    rows: list[list] = []  # [center, height, chars]
     for c in sorted(chars, key=lambda c: (-c[2], c[1])):
-        if rows and abs(rows[-1][0] - c[2]) <= 0.45 * max(rows[-1][1], c[4] if c[0] != " " else 0):
+        if rows and abs(rows[-1][0] - c[2]) <= 0.4 * min(rows[-1][1], c[4]):
             rows[-1][2].append(c)
-            rows[-1][1] = max(rows[-1][1], c[4] if c[0] != " " else 0)
         else:
-            rows.append([c[2], c[4] if c[0] != " " else 1.0, [c]])
+            rows.append([c[2], c[4], [c]])
     lines = []
     for _, _, row in rows:
         segment, prev_right = "", None
-        for ch, left, _, right, _ in sorted(row, key=lambda c: c[1]):
-            if prev_right is not None and left - prev_right > COLUMN_GAP_PT:
+        for ch, left, _, right, height in sorted(row, key=lambda c: (c[1], c[0] != " ")):
+            gap = left - prev_right if prev_right is not None else 0
+            if gap > COLUMN_GAP_PT:
                 lines.append(segment.strip())
                 segment = ""
-            segment += ch  # word spaces come from pdfium's own generated space characters
+            elif gap > 0.3 * height and not segment.endswith(" ") and ch != " ":
+                segment += " "  # a visual gap with no space character, e.g. between flex items
+            if not (ch == " " and segment.endswith(" ")):
+                segment += ch
             prev_right = max(right, left)
         lines.append(segment.strip())
     return [ln for ln in lines if ln]
@@ -147,13 +157,48 @@ def ensure_keywords(resume: dict, keywords: list[str]) -> tuple[dict, list[str]]
     return resume, missing
 
 
+def count_words(text: str) -> int:
+    """Words as checkers count them: bullets and separators like • · | - are not words."""
+    return sum(1 for w in text.split() if any(ch.isalnum() for ch in w))
+
+
+def trim_to_length(resume: dict, keywords: list[str], max_words: int = WORDS_MAX - 40) -> tuple[dict, int]:
+    """Length safety net: drop the least important bullets until the resume fits.
+
+    Takes the last bullet of projects first, then of the oldest roles, keeping 3 bullets
+    in the two most recent roles and 1 everywhere else, and never a bullet holding the
+    only mention of a job keyword. max_words leaves room for headings. Returns
+    (resume, bullets removed); the input is not changed.
+    """
+    resume = {**resume,
+              "experience": [{**j, "bullets": list(j["bullets"])} for j in resume["experience"]],
+              "projects": [{**p, "bullets": list(p["bullets"])} for p in resume["projects"]]}
+    entries = [(p, 1) for p in reversed(resume["projects"])] + \
+              [(j, 3 if i < 2 else 1) for i, j in reversed(list(enumerate(resume["experience"])))]
+    removed = 0
+    while count_words(resume_text(resume)) > max_words:
+        text = resume_text(resume).lower()
+        for entry, keep in entries:
+            bullets = entry["bullets"]
+            idx = next((i for i in range(len(bullets) - 1, keep - 1, -1)
+                        if all(_count(text, k) > _count(bullets[i].lower(), k)
+                               for k in keywords if _has_keyword(bullets[i].lower(), k))), None)
+            if idx is not None:
+                del bullets[idx]
+                removed += 1
+                break
+        else:
+            break  # nothing left that is safe to remove
+    return resume, removed
+
+
 def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None, job_title: str = "",
           job_text: str = "", one_column: bool = True) -> Report:
     text = pdf_text(pdf_bytes)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lower_lines = {ln.lower() for ln in lines}
     text_lower = text.lower()
-    words = len(text.split())
+    words = count_words(text)
     bullets = [b for job in resume["experience"] for b in job["bullets"]] + \
               [b for p in resume["projects"] for b in p["bullets"]]
     checks: list[Check] = []

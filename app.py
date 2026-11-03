@@ -165,11 +165,11 @@ def run_claude(label: str, system: str, content: str):
     return out
 
 
-def with_all_keywords(result: dict) -> dict:
-    """Max ATS match: any job keyword Claude still left out goes into Skills."""
-    resume, added = ats.ensure_keywords(result["resume"], st.session_state.get("job_keywords", []))
-    if not added:
-        return result
+def polish(result: dict, max_match: bool) -> dict:
+    """Safety nets after every Claude reply: all job keywords in (Max ATS match), length within limits."""
+    keywords = st.session_state.get("job_keywords", [])
+    resume, added = ats.ensure_keywords(result["resume"], keywords) if max_match else (result["resume"], [])
+    resume, _ = ats.trim_to_length(resume, keywords)
     return {**result, "resume": resume,
             "keywords_added": result["keywords_added"] + [{"keyword": k, "where": "Skills"} for k in added]}
 
@@ -204,8 +204,7 @@ def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report
                 st.session_state["job_keywords"] = merged
                 keywords_json = json.dumps(merged)
                 before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"])
-            if max_match:
-                new = with_all_keywords(new)
+            new = polish(new, max_match)
             after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"], ctx["job_text"])
             if after.score < before.score and not first_with_input:
                 status.write(f"Round {n} would lower the score ({before.score} → {after.score}), so it was discarded.")
@@ -349,8 +348,7 @@ if engine == ENGINE_MANUAL:
         if st.button("✨ Create my resume", type="primary", width="stretch"):
             try:
                 start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", job_title)
-                if max_match:
-                    versions()[0]["result"] = with_all_keywords(versions()[0]["result"])
+                versions()[0]["result"] = polish(versions()[0]["result"], max_match)
                 remember_master()
                 st.rerun()
             except main.TailorError as e:
@@ -364,8 +362,7 @@ else:
                          *main.tailor_request(master, job_text, job_title, max_match))
         if out:
             start_versions(out[0], f"Tailored · {out[1]}", job_title)
-            if max_match:
-                versions()[0]["result"] = with_all_keywords(out[0])
+            versions()[0]["result"] = polish(out[0], max_match)
             remember_master()
             auto_improve(target, max_rounds, [], "", ctx)  # reruns the page when done
 
@@ -511,7 +508,7 @@ with tab_improve:
                 new = main.parse_claude_reply(reply)
                 if ext_report:
                     st.session_state["job_keywords"] = list(dict.fromkeys(job_keywords + new["job_keywords"]))
-                add_version(with_all_keywords(new) if max_match else new, "Revised with claude.ai")
+                add_version(polish(new, max_match), "Revised with claude.ai")
                 st.rerun()
             except main.TailorError as e:
                 st.error(str(e))

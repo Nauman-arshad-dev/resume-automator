@@ -18,8 +18,10 @@ html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body { font-family: var(--sans); font-size: 10pt; line-height: 1.42; color: var(--ink); }
 a { color: inherit; text-decoration: none; }
 ul { list-style: none; }
-li { position: relative; margin: 1.4pt 0; padding-left: 1.05em; }
-.bullet { position: absolute; left: 0.1em; color: var(--accent); }
+/* Hanging indent with the bullet in the text flow (no positioning), so the PDF stores
+   "• text" in reading order and every ATS parser sees a bullet line. */
+li { margin: 1.4pt 0; padding-left: 1.05em; text-indent: -0.95em; }
+.bullet { display: inline-block; width: 0.95em; padding-left: 0.1em; text-indent: 0; color: var(--accent); }
 h1, h2, h3 { line-height: 1.15; }
 h2 { break-after: avoid-page; break-inside: avoid; }
 .sec-body > :first-child { break-before: avoid-page; }
