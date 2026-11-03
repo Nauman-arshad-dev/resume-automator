@@ -15,7 +15,8 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 - ✅ **Matches external checkers**: paste a Jobscan / Resume Worded report and every keyword it lists as missing is added, then tracked by the built-in score.
 - ✅ **One-click missing keywords** (strict mode): for each job keyword your resume doesn't prove, choose *I know the basics* or *I've done this at <job>* and it's added in the next round. Nothing is added unless you confirm it's true.
 - ✅ **8 professional resume templates**: Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold, each a different layout. You see all of them with your own resume.
-- ✅ **PDF and Word download**: choose the file name, accent color and A4 / US Letter page size.
+- ✅ **Built on proven resume rules**: one-column text PDF, standard headings, contact details in the body, exact job-post spelling, acronym plus full term, top skills up front, Action verb + what + measurable result bullets, 3-6 bullets per role. Each one is a scored check, and the app has a 📋 tips panel.
+- ✅ **PDF and Word download**: named Firstname-Lastname-Role.pdf by default; choose the file name, accent color and A4 / US Letter page size.
 - ✅ **Versions and undo**: every revision is a version with its score, and you can step back any time.
 - ✅ **Remembers your resume**: upload it once and it's reused for every job. Stored locally only.
 - ✅ **Works with any ATS checker**: optionally paste a Jobscan or Resume Worded report into the improve step.

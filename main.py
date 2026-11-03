@@ -27,7 +27,7 @@ CLI USAGE
     python main.py --resume resume.docx --label "Acme Data Engineer" --template Modern
     python main.py --out-dir "G:\My Drive\Resumes"     # Google Drive for desktop folder
 
-Outputs (in --out-dir, default ./output): <name>_<label>_<date>.pdf / .docx / .json
+Outputs (in --out-dir, default ./output): Firstname-Lastname-Role.pdf / .docx / .json
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ import json
 import os
 import re
 import sys
-from datetime import date
 from pathlib import Path
 
 import anthropic
@@ -129,11 +128,12 @@ MAX_MATCH_RULES = """- Max ATS match is on: the candidate wants EVERY job keywor
 - keywords_not_added holds only those credentials; every other keyword goes in keywords_added."""
 
 COMMON_RULES = """- Keep every role, project, and education entry, in the original order, with the original titles, companies, and dates. You may reorder bullets within a role to put the most relevant first, and reorder the skills list.
-- Keep bullets concise (ideally one line, at most two), starting with strong action verbs. Preserve existing numbers exactly.
-- Write every role as bullet points, never as paragraphs: 3-6 bullets for recent or relevant roles, 1-3 for older ones.
+- Bullets prove results, not duties: Action verb + what you did + measurable result, e.g. "Reduced page load time by 35% by splitting bundles and lazy loading images." Start with verbs like Built, Led, Automated, Launched, Reduced; never "Responsible for", "Worked on", "Helped" or "Duties included". Use real numbers from the master resume (users, revenue, time saved, tickets, accuracy) and preserve them exactly. Keep bullets concise (ideally one line, at most two).
+- Write every role as bullet points, never as paragraphs: 3-6 bullets for recent or relevant roles, 1-3 for older ones, the most relevant bullet first.
 - Never use first-person pronouns (I, me, my) or empty buzzwords (team player, hard worker, results-driven, go-getter); show the skill with a concrete example instead.
 - Keep the whole resume to roughly 450-800 words by trimming the least relevant bullets, not by dropping roles.
-- Rewrite the summary to target this role in 2-3 sentences (title, years of experience, top skills), using only facts from the resume.
+- Rewrite the summary to target this role in 2-3 sentences (title, years of experience, top skills), using only facts from the resume. Put the job's most important skills near the top: in the summary, the first Skills entries and the first bullet of each recent role.
+- Mirror the job post's exact spelling for tools, skills and titles (e.g. "JavaScript", not "Javascript"; "customer support", not "client help"). Write an acronym together with its full term once, e.g. "search engine optimisation (SEO)".
 - headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. If a target job title is given, start the headline with it verbatim and mention it in the summary. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
 - skills: plain-text entries; group related tools as "Category: tool, tool, tool".
 - Use empty strings or empty lists for fields the master resume does not have.
@@ -474,9 +474,10 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:40] or "resume"
 
 
-def output_stem(resume: dict, label: str = "") -> str:
-    parts = (_slug(resume["name"]), _slug(label) if label else "", date.today().isoformat())
-    return "_".join(x for x in parts if x)
+def output_stem(resume: dict, role: str = "") -> str:
+    """Recruiter-friendly file name: Firstname-Lastname-Role."""
+    parts = [resume["name"] or "Resume"] + ([role] if role.strip() else [])
+    return "-".join(_slug(p).replace("_", "-") for p in parts)
 
 
 def word_count(resume: dict) -> int:
@@ -505,7 +506,7 @@ def main() -> None:
     parser.add_argument("--resume", default="master_resume.json", help="Master resume (.json, .docx, .md or .txt)")
     parser.add_argument("--job", default="job_feedback.txt", help="Job description and/or ATS feedback")
     parser.add_argument("--out-dir", default="output", help="Output folder (e.g. a Google Drive for desktop folder)")
-    parser.add_argument("--label", default="", help="Label for the output file name, e.g. the company")
+    parser.add_argument("--label", default="", help="Role for the file name (default: --title)")
     parser.add_argument("--template", default="classic", choices=list(render.TEMPLATES), help="Resume template")
     parser.add_argument("--page", default="A4", choices=list(render.PAGE_SIZES), help="Page size")
     parser.add_argument("--title", default="", help="Exact job title from the posting")
@@ -550,7 +551,7 @@ def main() -> None:
         resume, _ = ats.ensure_keywords(resume, result["job_keywords"])
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = out_dir / output_stem(resume, args.label)
+    stem = out_dir / output_stem(resume, args.label or args.title)
 
     stem.with_suffix(".pdf").write_bytes(render.build_pdf(resume, args.template, page=args.page))
     render.build_docx(resume, stem.with_suffix(".docx"), args.template, page=args.page)

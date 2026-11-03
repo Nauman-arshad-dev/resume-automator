@@ -35,6 +35,26 @@ MODELS = {  # label -> (API model id, Claude Code alias)
     "Haiku 5.5 · fastest": ("claude-haiku-5-5", "haiku"),
 }
 EFFORTS = ["low", "medium", "high"]
+# Shown in the Improve tab; the built-in check and Claude's rules enforce each point.
+TIPS = """**Make it readable by software first.** A person only sees your resume if the software parsed it.
+- One column, standard headings: Summary, Skills, Experience, Projects, Education.
+- A text-based PDF or DOCX, never a screenshot, scan or photo.
+- Contact details in the body, not in the page header or footer.
+- No tables, text boxes, icons, skill bars or graphics.
+- File name: Firstname-Lastname-Role.pdf.
+
+**Mirror the job post.** Recruiters search for the exact words from the job post.
+- Same spelling for tools and titles, e.g. "JavaScript" and "customer support".
+- Acronym and full term once: "search engine optimisation (SEO)".
+- Most relevant skills near the top: in the summary and the first bullets.
+- One tailored version per application, made from a longer master resume.
+
+**Write bullets that prove results.** Duties say what the job was; bullets show what you achieved.
+- Action verb + what you did + measurable result: "Reduced page load time by 35% by splitting bundles \
+and lazy loading images."
+- Cut "responsible for" and "worked on". Start with Built, Led, Automated, Launched.
+- Real numbers: users, revenue, time saved, tickets, accuracy.
+- 3 to 6 bullets per role, most relevant first."""
 
 
 # --------------------------------------------------------------------------- #
@@ -85,7 +105,8 @@ def make_gallery(resume_json: str, page: str) -> dict[str, tuple[bytes, int]]:
 def ats_check(resume_json: str, template: str, accent: str, page: str, keywords_json: str, job_title: str,
               job_text: str = ""):
     pdf, _, _ = make_files(resume_json, template, accent, page)
-    return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title, job_text)
+    return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title, job_text,
+                     one_column=render.TEMPLATES[template]["ats"])
 
 
 def as_json(resume: dict) -> str:
@@ -100,11 +121,11 @@ def versions() -> list[dict]:
     return st.session_state.setdefault("versions", [])
 
 
-def start_versions(result: dict, note: str, company: str) -> None:
+def start_versions(result: dict, note: str, role: str) -> None:
     st.session_state["versions"] = [{"result": result, "note": note, "score": None}]
     # Keep the job's keywords fixed across versions so scores stay comparable
     st.session_state["job_keywords"] = result["job_keywords"]
-    st.session_state["filename"] = main.output_stem(result["resume"], company)
+    st.session_state["filename"] = main.output_stem(result["resume"], role)  # Firstname-Lastname-Role
 
 
 def add_version(result: dict, note: str, score: int | None = None) -> None:
@@ -282,10 +303,9 @@ with col_resume:
 with col_job:
     st.subheader("2 · The job")
     job_text = st.text_area("Job description", height=150, placeholder="Paste the full job posting").strip()
-    title_col, company_col = st.columns(2)
-    job_title = title_col.text_input("Exact job title", placeholder="Senior Backend Engineer",
-                                     help="ATS checkers look for the exact title.").strip()
-    company = company_col.text_input("Company", placeholder="Northwind", help="Used in the file name.").strip()
+    job_title = st.text_input("Exact job title", placeholder="Senior Backend Engineer",
+                              help="ATS checkers look for the exact title. Also names the file "
+                                   "Firstname-Lastname-Role.pdf.").strip()
     max_match = st.toggle(
         "🎯 Max ATS match: add every job keyword", value=saved.get("max_match", True), key="max_match",
         help="On: every keyword from the job goes into your resume (Skills plus a fitting bullet), aiming for "
@@ -328,7 +348,7 @@ if engine == ENGINE_MANUAL:
         reply = st.text_area("Claude's reply", height=110, key="tailor_reply")
         if st.button("✨ Create my resume", type="primary", width="stretch"):
             try:
-                start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", company)
+                start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", job_title)
                 if max_match:
                     versions()[0]["result"] = with_all_keywords(versions()[0]["result"])
                 remember_master()
@@ -343,7 +363,7 @@ else:
         out = run_claude("✍️ Claude is tailoring your resume — usually under a minute…",
                          *main.tailor_request(master, job_text, job_title, max_match))
         if out:
-            start_versions(out[0], f"Tailored · {out[1]}", company)
+            start_versions(out[0], f"Tailored · {out[1]}", job_title)
             if max_match:
                 versions()[0]["result"] = with_all_keywords(out[0])
             remember_master()
@@ -407,6 +427,8 @@ with tab_improve:
                     st.markdown(f"❌ **{c.name}** — {c.detail}  \n"
                                 f"<span style='color:gray;font-size:0.9em'>Fix: {c.fix}</span>",
                                 unsafe_allow_html=True)
+        with st.expander("📋 Resume tips"):
+            st.markdown(TIPS)
         if not meta["ats"]:
             st.warning(f"**{meta['label']}** is a design-focused template; for ATS checks switch to an "
                        "✅ ATS-friendly one in *Design & download*.")

@@ -25,8 +25,8 @@ BUZZWORDS = (
     "go-getter", "self-starter", "detail-oriented", "think outside the box", "synergy", "go-to person",
     "dynamic individual", "best of breed",
 )
-WEAK_STARTS = ("responsible for", "worked on", "helped", "assisted", "was ", "participated in",
-               "involved in", "duties included", "tasked with")
+WEAK_STARTS = ("responsible for", "worked on", "worked with", "helped", "assisted", "was ", "participated in",
+               "involved in", "duties included", "tasked with", "handled", "in charge of")
 PRONOUNS = re.compile(r"\bI\b|\bI'm\b|\bI've\b|(?i:\b(?:me|my|mine|myself)\b)")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
@@ -148,7 +148,7 @@ def ensure_keywords(resume: dict, keywords: list[str]) -> tuple[dict, list[str]]
 
 
 def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None, job_title: str = "",
-          job_text: str = "") -> Report:
+          job_text: str = "", one_column: bool = True) -> Report:
     text = pdf_text(pdf_bytes)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lower_lines = {ln.lower() for ln in lines}
@@ -162,8 +162,13 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
         checks.append(Check(group, name, bool(ok), detail if not ok else "Passed.", fix, weight))
 
     # Structure — what the parser can find in the PDF text
+    add("Structure", "Text-based PDF", words >= 50, "Almost no text could be read — this looks like an image.",
+        "Export a text-based PDF or DOCX, never a screenshot, scan or photo.", 4)
+    add("Structure", "One-column layout", one_column,
+        "This design uses columns, a sidebar or a timeline, which some ATS parsers read out of order.",
+        "Switch to an ✅ ATS-friendly one-column template (Classic, Modern, Executive, Compact).", 5)
     add("Structure", "Contact details", EMAIL.search(text) and PHONE.search(text),
-        "Email or phone number not found.", "Add your email and phone number to the contact line.", 4)
+        "Email or phone number not found.", "Put your email and phone in the body, not the page header or footer.", 4)
     for section, names in SECTIONS.items():
         found = any(n in lower_lines for n in names)
         weight = 4 if section in ("Summary", "Education") else 7
@@ -173,6 +178,12 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
     add("Structure", "Bullet points", bullet_lines >= max(3, int(0.7 * len(bullets))),
         f"Only {bullet_lines} bullet lines found in the PDF text.",
         "Write each role as 3-6 short bullets, not paragraphs.", 6)
+    jobs = resume["experience"]
+    bad_counts = [j["company"] or j["title"] for i, j in enumerate(jobs)
+                  if len(j["bullets"]) > 6 or (i < 2 and len(j["bullets"]) < 3)]
+    add("Structure", "3-6 bullets per role", not bad_counts,
+        "Wrong number of bullets at: " + ", ".join(bad_counts) + "." if bad_counts else "",
+        "Give recent roles 3-6 bullets (older roles 1-3), most relevant first.", 3)
     add("Structure", "Dates for every role", all(j["dates"].strip() for j in resume["experience"]),
         "Some roles have no dates.", "Add start and end dates (e.g. Jan 2023 - Present) to every role.", 3)
 
@@ -193,7 +204,8 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
     with_numbers = sum(bool(re.search(r"\d", b)) for b in bullets)
     add("Content", "Results backed by numbers", with_numbers >= 5, f"Only {with_numbers} bullets include a number "
         "(checkers like Jobscan want at least 5).",
-        "Add real numbers (users, %, time saved, scale) to a few bullets — only ones you can stand behind.", 4)
+        "Use Action verb + what you did + measurable result, e.g. \"Reduced page load time by 35% by "
+        "splitting bundles\". Real numbers only: users, revenue, time saved, tickets, accuracy.", 4)
     summary_words = len(resume["summary"].split())
     add("Content", "Short summary at the top", 15 <= summary_words <= 90,
         f"Summary is {summary_words} words." if summary_words else "No summary.",
@@ -209,6 +221,13 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
     matched = [k for k in keywords if _has_keyword(text_lower, k)]
     missing = [k for k in keywords if k not in matched]
     if keywords:
+        top = f"{resume['headline']} {resume['summary']}".lower()
+        up_front = [k for k in keywords if _has_keyword(top, k)]
+        need = min(3, len(keywords))
+        add("Job match", "Top skills up front", len(up_front) >= need,
+            f"Only {len(up_front)} job keywords in your headline and summary.",
+            "Put the job's most important skills in the summary and the first bullets.", 4)
+
         weight = 33.0
         c = Check("Job match", "Job keywords", not missing,
                   f"{len(matched)} of {len(keywords)} keywords found." if missing else "Passed.",
