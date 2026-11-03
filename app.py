@@ -12,6 +12,7 @@ subscription, no copy-paste), the Anthropic API, or copy-paste with claude.ai.
 
 import io
 import json
+import re
 import time
 from pathlib import Path
 
@@ -85,12 +86,23 @@ def save_master(text: str) -> None:
 # --------------------------------------------------------------------------- #
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def make_files(resume_json: str, template: str, accent: str, page: str) -> tuple[bytes, bytes, list[bytes]]:
+def make_files(resume_json: str, template: str, accent: str, page: str, font: str = "",
+               size: str = "Normal") -> tuple[bytes, bytes, list[bytes]]:
     resume = json.loads(resume_json)
-    pdf = render.build_pdf(resume, template, accent, page)
+    pdf = render.build_pdf(resume, template, accent, page, font, size)
     docx = io.BytesIO()
-    render.build_docx(resume, docx, template, accent, page)
+    render.build_docx(resume, docx, template, accent, page, font, size)
     return pdf, docx.getvalue(), render.pdf_page_images(pdf)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def make_cover(resume_json: str, letter_json: str, template: str, accent: str, page: str, font: str,
+               size: str) -> tuple[bytes, bytes, list[bytes]]:
+    resume, letter = json.loads(resume_json), json.loads(letter_json)
+    pdf = render.build_cover_pdf(resume, letter, accent, page, font, size)
+    docx = io.BytesIO()
+    render.build_cover_docx(resume, letter, docx, template, accent, page, font, size)
+    return pdf, docx.getvalue(), render.pdf_page_images(pdf, scale=1.2)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -102,9 +114,9 @@ def make_gallery(resume_json: str, page: str) -> dict[str, tuple[bytes, int]]:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def ats_check(resume_json: str, template: str, accent: str, page: str, keywords_json: str, job_title: str,
-              job_text: str = ""):
-    pdf, _, _ = make_files(resume_json, template, accent, page)
+def ats_check(resume_json: str, template: str, accent: str, page: str, font: str, size: str,
+              keywords_json: str, job_title: str, job_text: str = ""):
+    pdf, _, _ = make_files(resume_json, template, accent, page, font, size)
     return ats.check(json.loads(resume_json), pdf, json.loads(keywords_json), job_title, job_text,
                      one_column=render.TEMPLATES[template]["ats"])
 
@@ -123,6 +135,7 @@ def versions() -> list[dict]:
 
 def start_versions(result: dict, note: str, role: str) -> None:
     st.session_state["versions"] = [{"result": result, "note": note, "score": None}]
+    st.session_state.pop("cover_letter", None)  # it belonged to the previous job
     # Keep the job's keywords fixed across versions so scores stay comparable
     st.session_state["job_keywords"] = result["job_keywords"]
     st.session_state["filename"] = main.output_stem(result["resume"], role)  # Firstname-Lastname-Role
@@ -153,11 +166,11 @@ def engine_config() -> dict:
             "effort": effort, "api_key": api_key, "cli_path": cli_path}
 
 
-def run_claude(label: str, system: str, content: str):
+def run_claude(label: str, system: str, content: str, schema: dict | None = None):
     started = time.time()
     with st.status(label, expanded=False) as status:
         try:
-            out = engines.run(engine_config(), system, content)
+            out = engines.run(engine_config(), system, content, schema)
         except engines.EngineError as e:
             status.update(label=f"❌ {e}", state="error", expanded=True)
             return None
@@ -176,7 +189,7 @@ def polish(result: dict, max_match: bool) -> dict:
 
 def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report: str, ctx: dict) -> None:
     """Check → revise → re-check until the target score, no further gain, or max_rounds."""
-    view = (ctx["template"], ctx["accent"], ctx["page"])
+    view = (ctx["template"], ctx["accent"], ctx["page"], ctx["font"], ctx["size"])
     max_match = ctx["max_match"]
     with st.status("🚀 Improving your resume…", expanded=True) as status:
         for n in range(1, max_rounds + 1):
@@ -258,7 +271,8 @@ with st.sidebar:
                            help="Stored in this app's folder only (settings.json, data/). Never uploaded.")
     settings = {"engine": engine, "api_key": api_key, "model_label": model_label, "effort": effort,
                 "out_dir": out_dir, "remember": remember,
-                "max_match": st.session_state.get("max_match", saved.get("max_match", True))}
+                "max_match": st.session_state.get("max_match", saved.get("max_match", True)),
+                "font": st.session_state.get("font", saved.get("font", ""))}
     if remember and settings != saved:
         SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     elif not remember:
@@ -321,7 +335,11 @@ template = st.session_state["template"]
 meta = render.TEMPLATES[template]
 accent = st.session_state.get(f"accent_{template}") or meta["accent"]
 page = st.session_state.get("page", "A4")
-ctx = {"template": template, "accent": accent, "page": page, "job_title": job_title,
+font = st.session_state.get("font") or saved.get("font", "")
+font = font if font in render.FONTS else next(iter(render.FONTS))
+size = st.session_state.get("text_size", "Normal")
+look = (template, accent, page, font, size)
+ctx = {"template": template, "accent": accent, "page": page, "font": font, "size": size, "job_title": job_title,
        "master": master, "job_text": job_text, "max_match": max_match}
 target = st.session_state.get("target", 100 if max_match else 90)
 max_rounds = st.session_state.get("max_rounds", 3)
@@ -382,8 +400,8 @@ filename = main.safe_filename(st.session_state.get("filename", "")) or "resume"
 
 try:
     with st.spinner("Rendering and checking…"):
-        pdf_bytes, docx_bytes, pages = make_files(resume_json, template, accent, page)
-        report = ats_check(resume_json, template, accent, page, json.dumps(job_keywords), job_title, job_text)
+        pdf_bytes, docx_bytes, pages = make_files(resume_json, *look)
+        report = ats_check(resume_json, *look, json.dumps(job_keywords), job_title, job_text)
 except render.RenderError as e:
     st.error(str(e))
     st.stop()
@@ -404,7 +422,8 @@ with actions_col:
     if len(vs) > 1:
         st.button(f"↩️ Undo — back to v{len(vs) - 1}", on_click=undo, width="stretch")
 
-tab_improve, tab_design, tab_edit = st.tabs(["📈 Improve ATS score", "🎨 Design & download", "✏️ Edit text"])
+tab_improve, tab_design, tab_cover, tab_edit = st.tabs(
+    ["📈 Improve ATS score", "🎨 Design & download", "✉️ Cover letter", "✏️ Edit text"])
 
 # --------------------------------------------------------------------------- #
 # Tab: Improve
@@ -556,6 +575,11 @@ with tab_design:
     with controls:
         st.markdown(f"**{meta['label']}**")
         st.color_picker("Accent color", meta["accent"], key=f"accent_{template}")
+        font_col, size_col = st.columns(2)
+        font_col.selectbox("Font", list(render.FONTS), index=list(render.FONTS).index(font), key="font",
+                           help="All of these are standard fonts that ATS parsers and Word read reliably.")
+        size_col.radio("Text size", list(render.TEXT_SIZES), index=list(render.TEXT_SIZES).index(size),
+                       horizontal=True, key="text_size", help="Small helps fit one page.")
         st.radio("Page size", list(render.PAGE_SIZES), horizontal=True, key="page")
         st.text_input("File name", key="filename")
         st.download_button("⬇️ Download PDF", pdf_bytes, f"{filename}.pdf", mime="application/pdf",
@@ -593,3 +617,51 @@ with tab_edit:
             st.rerun()
         except main.TailorError as e:
             st.error(str(e))
+
+# --------------------------------------------------------------------------- #
+# Tab: Cover letter
+# --------------------------------------------------------------------------- #
+with tab_cover:
+    st.caption("A cover letter for this job, written from your current resume version, in the same design.")
+    letter = st.session_state.get("cover_letter")
+    if engine == ENGINE_MANUAL:
+        st.markdown("Copy the prompt → paste into a [new Claude chat](https://claude.ai/new) → paste the reply below.")
+        st.code(main.build_cover_letter_prompt(resume, job_text, job_title), language=None, height=120)
+        reply = st.text_area("Claude's reply", height=100, key="cover_reply")
+        if st.button("✉️ Create cover letter", type="primary", width="stretch"):
+            try:
+                st.session_state["cover_letter"] = main.parse_cover_letter(reply)
+                st.rerun()
+            except main.TailorError as e:
+                st.error(str(e))
+    elif st.button("✉️ Write my cover letter" if not letter else "🔁 Write a new cover letter",
+                   type="primary", width="stretch", disabled=not job_text):
+        out = run_claude("✉️ Claude is writing your cover letter…",
+                         *main.cover_letter_request(resume, job_text, job_title), main.COVER_LETTER_SCHEMA)
+        if out:
+            st.session_state["cover_letter"] = out[0]
+            st.rerun()
+
+    if letter:
+        body = "\n\n".join(x for x in [letter["greeting"], *letter["paragraphs"]] if x)
+        edited = st.text_area("Edit the letter (blank line between paragraphs)", body, height=320,
+                              key=f"cover_edit_{hash(body)}")
+        parts = [x.strip() for x in re.split(r"\n\s*\n", edited) if x.strip()]
+        if parts and parts[0].lower().startswith("dear "):
+            letter = {**letter, "greeting": parts[0], "paragraphs": parts[1:]}
+        else:
+            letter = {**letter, "greeting": "", "paragraphs": parts}
+        st.caption(f"{sum(len(p.split()) for p in letter['paragraphs'])} words · most recruiters like 200-350.")
+        try:
+            cover_pdf, cover_docx, cover_pages = make_cover(resume_json, json.dumps(letter), *look)
+        except render.RenderError as e:
+            st.error(str(e))
+        else:
+            pdf_col, docx_col = st.columns(2)
+            pdf_col.download_button("⬇️ Download cover letter PDF", cover_pdf, f"{filename}-Cover-Letter.pdf",
+                                    mime="application/pdf", type="primary", width="stretch")
+            docx_col.download_button("⬇️ Download cover letter Word", cover_docx,
+                                     f"{filename}-Cover-Letter.docx", width="stretch",
+                                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            for png in cover_pages:
+                st.image(png, width="stretch")

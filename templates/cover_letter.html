@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block page_margin %}20mm 22mm{% endblock %}
+{% block style %}
+body { font-size: 10.6pt; line-height: 1.55; }
+header { padding-bottom: 9pt; margin-bottom: 20pt; border-bottom: 3px solid var(--accent); }
+h1 { font-size: 24pt; font-weight: 700; color: var(--accent); }
+.headline { margin-top: 2pt; font-size: 11pt; font-weight: 600; }
+.contact { display: flex; flex-wrap: wrap; gap: 2pt 14pt; margin-top: 6pt; font-size: 9pt; color: var(--muted); }
+.date { margin-bottom: 16pt; color: var(--muted); }
+.letter p { margin-bottom: 10pt; }
+.sign { margin-top: 16pt; }
+.sign .name { margin-top: 2pt; font-weight: 700; }
+{% endblock %}
+{% block body %}
+<header>
+  <h1>{{ r.name }}</h1>
+  {% if r.headline %}<div class="headline">{{ r.headline }}</div>{% endif %}
+  {{ m.contact(r) }}
+</header>
+<div class="date">{{ today }}</div>
+<div class="letter">
+  {% if letter.greeting %}<p>{{ letter.greeting }}</p>{% endif %}
+  {% for p in letter.paragraphs %}<p>{{ p }}</p>{% endfor %}
+</div>
+<div class="sign">
+  <div>{{ letter.closing or "Kind regards," }}</div>
+  <div class="name">{{ r.name }}</div>
+</div>
+{% endblock %}

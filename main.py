@@ -183,6 +183,53 @@ TAILOR_RULES = tailor_rules()
 SYSTEM_PROMPT = tailor_system()
 REVISION_PROMPT = revision_system()
 
+COVER_LETTER_SCHEMA = _obj({
+    "greeting": _STR,     # e.g. "Dear Hiring Manager,"
+    "paragraphs": _STR_LIST,
+    "closing": _STR,      # e.g. "Kind regards,"
+})
+
+COVER_LETTER_PROMPT = """You are an expert career writer. Write a cover letter for the job, based on the candidate's tailored resume.
+
+Rules:
+- Use only facts from the resume: employers, titles, projects, skills and numbers exactly as written there. Never invent achievements or metrics.
+- 3-4 short paragraphs, 220-330 words in total:
+  1. The exact job title and company (from the job description), and one sentence on why this role fits the candidate.
+  2-3. Two or three concrete achievements from the resume that match the job's main requirements, using the job's own keywords and spelling.
+  4. A short close: enthusiasm for the company's work (only what the job description says about it) and a request for an interview.
+- Confident and specific, plain words. No first line like "I am writing to apply", no buzzwords (team player, hard worker, results-driven, passionate go-getter), no flattery or clichés.
+- greeting: "Dear Hiring Manager," unless the job description names the hiring person. Never use placeholders like [Company] or [Name]: if the company name is not given, write around it.
+- closing: e.g. "Kind regards,". The app adds the candidate's name below it."""
+
+
+def cover_letter_request(resume: dict, job_text: str, job_title: str = "") -> tuple[str, str]:
+    """(system prompt, user content) for a cover letter — for engines.run(..., schema=COVER_LETTER_SCHEMA)."""
+    content = (
+        f"<resume>\n{json.dumps(resume, ensure_ascii=False, separators=(',', ':'))}\n</resume>\n\n"
+        f"<job_description>\n{job_text}\n</job_description>\n\n"
+        f"{_title_block(job_title)}"
+        "Write the cover letter following the rules."
+    )
+    return COVER_LETTER_PROMPT, content
+
+
+def build_cover_letter_prompt(resume: dict, job_text: str, job_title: str = "") -> str:
+    return _manual_prompt(*cover_letter_request(resume, job_text, job_title), COVER_LETTER_SCHEMA)
+
+
+def parse_cover_letter(text: str) -> dict:
+    """Read a pasted cover-letter reply; plain text (no JSON) is accepted as the letter itself."""
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return normalize(_load_json(text[start:end + 1]), COVER_LETTER_SCHEMA)
+        except json.JSONDecodeError:
+            pass
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    if not paragraphs:
+        raise TailorError("Paste Claude's cover letter reply.")
+    return {"greeting": "", "paragraphs": paragraphs, "closing": ""}
+
 
 class TailorError(Exception):
     """Claude finished without a usable resume (refusal, truncated or unreadable output)."""
@@ -274,7 +321,8 @@ def revise_resume(
     return _call_claude(REVISION_PROMPT, content, api_key, model, effort)
 
 
-def _call_claude(system: str, content: str, api_key: str | None, model: str, effort: str) -> tuple[dict, str]:
+def _call_claude(system: str, content: str, api_key: str | None, model: str, effort: str,
+                 schema: dict = RESPONSE_SCHEMA) -> tuple[dict, str]:
     client = anthropic.Anthropic(api_key=api_key or None)
 
     response = client.messages.create(
@@ -284,7 +332,7 @@ def _call_claude(system: str, content: str, api_key: str | None, model: str, eff
         messages=[{"role": "user", "content": content}],
         output_config={
             "effort": effort,
-            "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA},
+            "format": {"type": "json_schema", "schema": schema},
         },
         # If a safety classifier declines the request, Anthropic re-runs it on a
         # recommended fallback model instead of returning a refusal.
@@ -300,7 +348,7 @@ def _call_claude(system: str, content: str, api_key: str | None, model: str, eff
     text = "".join(block.text for block in response.content if block.type == "text")
     u = response.usage
     usage = f"Model: {response.model} | tokens in: {u.input_tokens}, out: {u.output_tokens}"
-    return normalize(json.loads(text), RESPONSE_SCHEMA), usage
+    return normalize(json.loads(text), schema), usage
 
 
 # --------------------------------------------------------------------------- #
@@ -342,8 +390,8 @@ def build_revision_prompt(master_resume: str, job_feedback: str, resume: dict, a
                                             progress, confirmed, max_match))
 
 
-def _manual_prompt(system: str, content: str) -> str:
-    shape = json.dumps(_skeleton(RESPONSE_SCHEMA), separators=(",", ":"))
+def _manual_prompt(system: str, content: str, schema: dict = RESPONSE_SCHEMA) -> str:
+    shape = json.dumps(_skeleton(schema), separators=(",", ":"))
     return (
         f"{system}\n\n"
         f"{content}\n\n"

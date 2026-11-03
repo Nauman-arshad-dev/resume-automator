@@ -16,6 +16,8 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 - ✅ **One-click missing keywords** (strict mode): for each job keyword your resume doesn't prove, choose *I know the basics* or *I've done this at <job>* and it's added in the next round. Nothing is added unless you confirm it's true.
 - ✅ **8 professional resume templates**: Classic, Modern, Executive, Minimal, Compact, Sidebar, Timeline and Bold, each a different layout. You see all of them with your own resume.
 - ✅ **Built on proven resume rules**: one-column text PDF, standard headings, contact details in the body, exact job-post spelling, acronym plus full term, top skills up front, Action verb + what + measurable result bullets, 3-6 bullets per role. Each one is a scored check, and the app has a 📋 tips panel.
+- ✅ **Fonts and text size**: 10 ATS-safe fonts (Arial, Calibri, Segoe UI, Georgia, Cambria, Garamond, Palatino, Times New Roman and more) with Small / Normal / Large text. Small helps fit one page.
+- ✅ **✉️ Cover letter generator**: one click writes a cover letter for the same job from your tailored resume (facts only, 220-330 words). Edit it in the app and download it as PDF or Word in the same design.
 - ✅ **PDF and Word download**: named Firstname-Lastname-Role.pdf by default; choose the file name, accent color and A4 / US Letter page size.
 - ✅ **Versions and undo**: every revision is a version with its score, and you can step back any time.
 - ✅ **Remembers your resume**: upload it once and it's reused for every job. Stored locally only.
@@ -124,4 +126,4 @@ Issues and pull requests are welcome. Ideas: cover letter generation, more templ
 
 ---
 
-*Keywords: AI resume tailor, ATS resume optimizer, ATS score checker, improve ATS score, free AI resume builder, professional resume templates, two-column resume template, resume to PDF, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Claude Code, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*
+*Keywords: AI resume tailor, AI cover letter generator, ATS resume optimizer, ATS score checker, improve ATS score, free AI resume builder, professional resume templates, two-column resume template, resume to PDF, resume keyword optimizer, tailor resume to job description, ATS-friendly resume generator, Claude AI resume, Claude Code, Anthropic API Python, resume automation, job application automation, CV optimizer, Jobscan alternative, open source resume tool.*

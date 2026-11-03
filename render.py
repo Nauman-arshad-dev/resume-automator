@@ -39,6 +39,22 @@ TEMPLATES = {
     "bold": {"label": "Bold", "about": "Big name, skill tags, side panel", "accent": "#D9480F", "ats": False, "font": "Arial", "align": "L"},
 }
 PAGE_SIZES = {"A4": "A4", "US Letter": "Letter"}
+# label -> CSS font stack. All are standard fonts that ATS parsers and Word read reliably;
+# the first family is used in the Word version. "" keeps the template's own fonts.
+FONTS = {
+    "Template default": "",
+    "Arial": "Arial, Helvetica, sans-serif",
+    "Calibri": "Calibri, Carlito, Arial, sans-serif",
+    "Segoe UI": '"Segoe UI", "Helvetica Neue", Arial, sans-serif',
+    "Trebuchet MS": '"Trebuchet MS", "Lucida Grande", Arial, sans-serif',
+    "Verdana": "Verdana, Geneva, sans-serif",
+    "Georgia": "Georgia, serif",
+    "Cambria": "Cambria, Caladea, Georgia, serif",
+    "Garamond": 'Garamond, "EB Garamond", "Times New Roman", serif',
+    "Palatino": '"Palatino Linotype", Palatino, "Book Antiqua", serif',
+    "Times New Roman": '"Times New Roman", Times, serif',
+}
+TEXT_SIZES = {"Small": 0.93, "Normal": 1.0, "Large": 1.07}  # scale factor; Small helps fit one page
 MUTED_COLOR = (91, 97, 104)
 
 
@@ -105,9 +121,21 @@ _env.filters["link"] = _link
 _env.filters["skill_groups"] = _skill_groups
 
 
-def build_html(resume: dict, template: str = "classic", accent: str | None = None, page: str = "A4") -> str:
+def _style_override(font: str, size: str) -> Markup:
+    """CSS appended after the template's own: the chosen font and text size."""
+    css = ""
+    if stack := FONTS.get(font):
+        css += f":root {{ --sans: {stack}; --serif: {stack}; }} "
+    if (zoom := TEXT_SIZES.get(size, 1.0)) != 1.0:
+        css += f"body {{ zoom: {zoom}; }}"
+    return Markup(css)  # built only from the fixed tables above
+
+
+def build_html(resume: dict, template: str = "classic", accent: str | None = None, page: str = "A4",
+               font: str = "", size: str = "Normal") -> str:
     return _env.get_template(f"{template}.html").render(
         r=resume, accent=accent or TEMPLATES[template]["accent"], page_size=PAGE_SIZES[page],
+        style_override=_style_override(font, size),
     )
 
 
@@ -145,8 +173,9 @@ def html_to_pdfs(htmls: list[str]) -> list[bytes]:
             browser.close()
 
 
-def build_pdf(resume: dict, template: str = "classic", accent: str | None = None, page: str = "A4") -> bytes:
-    return html_to_pdfs([build_html(resume, template, accent, page)])[0]
+def build_pdf(resume: dict, template: str = "classic", accent: str | None = None, page: str = "A4",
+              font: str = "", size: str = "Normal") -> bytes:
+    return html_to_pdfs([build_html(resume, template, accent, page, font, size)])[0]
 
 
 def build_all_pdfs(resume: dict, page: str = "A4") -> dict[str, bytes]:
@@ -195,7 +224,13 @@ def _bottom_border(paragraph, color: str) -> None:
     p_pr.append(borders)
 
 
-def build_docx(resume: dict, path, template: str = "classic", accent: str | None = None, page: str = "A4") -> None:
+def docx_font(template: str, font: str = "") -> str:
+    stack = FONTS.get(font)
+    return stack.split(",")[0].strip().strip('"') if stack else TEMPLATES[template]["font"]
+
+
+def build_docx(resume: dict, path, template: str = "classic", accent: str | None = None, page: str = "A4",
+               font: str = "", size: str = "Normal") -> None:
     """path may be a file path or a writable binary stream (e.g. io.BytesIO)."""
     t = TEMPLATES[template]
     accent = accent or t["accent"]
@@ -205,8 +240,8 @@ def build_docx(resume: dict, path, template: str = "classic", accent: str | None
 
     doc = Document()
     normal = doc.styles["Normal"]
-    normal.font.name = t["font"]
-    normal.font.size = Pt(10)
+    normal.font.name = docx_font(template, font)
+    normal.font.size = Pt(round(10 * TEXT_SIZES.get(size, 1.0), 1))
     for section in doc.sections:
         section.page_width, section.page_height = (Mm(210), Mm(297)) if page == "A4" else (Inches(8.5), Inches(11))
         section.top_margin = section.bottom_margin = Pt(40)
@@ -289,4 +324,51 @@ def build_docx(resume: dict, path, template: str = "classic", accent: str | None
         heading("Certifications")
         bullets(resume["certifications"])
 
+    doc.save(path)
+
+
+# --------------------------------------------------------------------------- #
+# Cover letter (same header, accent colour, font and size as the resume)
+# --------------------------------------------------------------------------- #
+
+def _today() -> str:
+    from datetime import date
+    return date.today().strftime("%d %B %Y").lstrip("0")
+
+
+def build_cover_pdf(resume: dict, letter: dict, accent: str, page: str = "A4", font: str = "",
+                    size: str = "Normal") -> bytes:
+    html = _env.get_template("cover_letter.html").render(
+        r=resume, letter=letter, today=_today(), accent=accent, page_size=PAGE_SIZES[page],
+        style_override=_style_override(font, size),
+    )
+    return html_to_pdfs([html])[0]
+
+
+def build_cover_docx(resume: dict, letter: dict, path, template: str, accent: str, page: str = "A4",
+                     font: str = "", size: str = "Normal") -> None:
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = docx_font(template, font)
+    normal.font.size = Pt(round(10.5 * TEXT_SIZES.get(size, 1.0), 1))
+    for section in doc.sections:
+        section.page_width, section.page_height = (Mm(210), Mm(297)) if page == "A4" else (Inches(8.5), Inches(11))
+        section.top_margin = section.bottom_margin = section.left_margin = section.right_margin = Mm(20)
+
+    run = doc.add_paragraph().add_run(resume["name"])
+    run.bold = True
+    run.font.size = Pt(20)
+    run.font.color.rgb = RGBColor(*_rgb(accent))
+    if resume["headline"]:
+        doc.add_paragraph().add_run(resume["headline"]).bold = True
+    if resume["contact"]:
+        contact = doc.add_paragraph()
+        contact.add_run("  |  ".join(resume["contact"])).font.color.rgb = RGBColor(*MUTED_COLOR)
+        _bottom_border(contact, accent)
+    doc.add_paragraph(_today())
+    for text in [letter["greeting"], *letter["paragraphs"]]:
+        if text:
+            doc.add_paragraph(text).paragraph_format.space_after = Pt(8)
+    doc.add_paragraph(letter["closing"] or "Kind regards,")
+    doc.add_paragraph().add_run(resume["name"]).bold = True
     doc.save(path)
