@@ -280,6 +280,7 @@ def _manual_prompt(system: str, content: str) -> str:
         f"{content}\n\n"
         "Output format: reply with ONLY one JSON object (no commentary, no markdown code fences, "
         "no artifact), using straight ASCII double quotes (\"), never curly quotes, "
+        "and never a double quote inside a text value (write 'single quotes' there instead), "
         f"in exactly this shape:\n{shape}"
     )
 
@@ -287,16 +288,66 @@ def _manual_prompt(system: str, content: str) -> str:
 # Curly quotes that Word, notes apps and phone keyboards ("smart punctuation")
 # substitute for JSON's straight double quote when a reply is copied through them.
 _SMART_DOUBLE_QUOTES = str.maketrans({c: '"' for c in "“”„‟″"})
+_WS = " \t\r\n"
+
+
+def _escape_stray_quotes(text: str) -> str:
+    """Escape double quotes Claude left unescaped inside a JSON string, e.g. "title "X" is wrong".
+
+    A quote inside a string only ends it if what follows is JSON structure: } ] : or
+    a comma followed by the next string/object/array (inside an object, that next
+    string must be a key, i.e. followed by a colon). Anything else is part of the text.
+    """
+    out, in_string, stack, i, n = [], False, [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if not in_string:
+            in_string = ch == '"'
+            if ch in "{[":
+                stack.append(ch)
+            elif ch in "}]" and stack:
+                stack.pop()
+        elif ch == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        elif ch == '"':
+            j = i + 1
+            while j < n and text[j] in _WS:
+                j += 1
+            nxt = text[j] if j < n else ""
+            if nxt == ",":
+                k = j + 1
+                while k < n and text[k] in _WS:
+                    k += 1
+                ends = k >= n or text[k] in '"{['
+                if ends and k < n and text[k] == '"' and stack and stack[-1] == "{":
+                    key_end = text.find('"', k + 1)
+                    p = key_end + 1
+                    while 0 < p < n and text[p] in _WS:
+                        p += 1
+                    ends = key_end != -1 and p < n and text[p] == ":"
+            else:
+                ends = nxt in ("", "}", "]", ":")
+            if ends:
+                in_string = False
+            else:
+                out.append("\\")
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _load_json(text: str):
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        fixed = text.translate(_SMART_DOUBLE_QUOTES)
-        if fixed == text:
-            raise
-        return json.loads(fixed)
+    """Parse JSON, then retry with repairs: stray inner quotes, then smart quotes + stray quotes."""
+    candidates = [text, _escape_stray_quotes(text), _escape_stray_quotes(text.translate(_SMART_DOUBLE_QUOTES))]
+    first_error = None
+    for candidate in dict.fromkeys(candidates):  # unique, in order
+        try:
+            return json.loads(candidate, strict=False)  # strict=False: allow raw newlines in strings
+        except json.JSONDecodeError as e:
+            first_error = first_error or e
+    raise first_error
 
 
 def parse_claude_reply(text: str) -> dict:
