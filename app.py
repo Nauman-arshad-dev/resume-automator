@@ -5,9 +5,11 @@ Run from the VS Code terminal:
     .\.venv\Scripts\Activate.ps1
     streamlit run app.py
 
-Flow: your resume + the job → ✨ Tailor → built-in ATS score → 🚀 Auto-improve →
-pick a design → download. Claude runs through Claude Code (your Claude
-subscription, no copy-paste), the Anthropic API, or copy-paste with claude.ai.
+Flow: your resume + the job + job type → 🔍 Analyse the job → confirm the skills it
+asks for that your resume doesn't show (Strong / Basic / Learning / No, remembered
+for next time) → ✨ Build → built-in ATS score and auto-improve → review → design →
+download. Claude runs through Claude Code (your Claude subscription), the Anthropic
+API, or copy-paste with claude.ai. Every resume is built from the master resume.
 """
 
 import io
@@ -22,10 +24,12 @@ import ats
 import engines
 import main
 import render
+import review
 
 APP_DIR = Path(__file__).parent
 SETTINGS_FILE = APP_DIR / "settings.json"
-MASTER_FILE = APP_DIR / "data" / "master_resume.txt"  # git-ignored
+MASTER_FILE = APP_DIR / "data" / "master_resume.txt"              # git-ignored
+CONFIRM_FILE = APP_DIR / "data" / "skill_confirmations.json"      # git-ignored
 
 ENGINE_CODE = "Claude Code — your Claude plan (automatic)"
 ENGINE_API = "Anthropic API key (pay per use)"
@@ -36,6 +40,17 @@ MODELS = {  # label -> (API model id, Claude Code alias)
     "Haiku 5.5 · fastest": ("claude-haiku-5-5", "haiku"),
 }
 EFFORTS = ["low", "medium", "high"]
+LEVEL_HELP = {
+    "Strong": "Used it for real work",
+    "Basic": "Used it a little or learned it → Working knowledge line",
+    "Learning": "Learning it now → Currently learning line",
+    "No": "No exposure → not claimed, listed as a gap",
+}
+# Per-job state: cleared by "New job" (the master resume and skill answers stay)
+JOB_KEYS = {"versions", "job_keywords", "analysis", "analysis_for", "cover_letter", "filename", "notice",
+            "job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
+            "analysis_reply", "tailor_reply", "cover_reply", "auto_build"}
+JOB_KEY_PREFIXES = ("confirm_", "ext_report_", "revision_reply_", "edit_", "cover_edit_", "kw_")
 # Shown in the Improve tab; the built-in check and Claude's rules enforce each point.
 TIPS = """**Make it readable by software first.** A person only sees your resume if the software parsed it.
 - One column, standard headings: Summary, Skills, Experience, Projects, Education.
@@ -44,27 +59,27 @@ TIPS = """**Make it readable by software first.** A person only sees your resume
 - No tables, text boxes, icons, skill bars or graphics.
 - File name: Firstname-Lastname-Role.pdf.
 
-**Mirror the job post.** Recruiters search for the exact words from the job post.
+**Mirror the job post honestly.** Recruiters search for the exact words from the job post.
 - Same spelling for tools and titles, e.g. "JavaScript" and "customer support".
 - Acronym and full term once: "search engine optimisation (SEO)".
 - Most relevant skills near the top: in the summary and the first bullets.
-- One tailored version per application, made from a longer master resume.
+- A skill only where it's true: interviewers ask about every skill listed.
 
 **Write bullets that prove results.** Duties say what the job was; bullets show what you achieved.
-- Action verb + what you did + measurable result: "Reduced page load time by 35% by splitting bundles \
+- Action verb + what you did + technology + result: "Reduced page load time by 35% by splitting bundles \
 and lazy loading images."
 - Cut "responsible for" and "worked on". Start with Built, Led, Automated, Launched.
-- Real numbers: users, revenue, time saved, tickets, accuracy.
+- Real numbers only. No real number? Describe the impact in words.
 - 3 to 6 bullets per role, most relevant first."""
 
 
 # --------------------------------------------------------------------------- #
-# Persistence
+# Persistence (all local, in this app's folder)
 # --------------------------------------------------------------------------- #
 
-def load_settings() -> dict:
+def _read_json(path: Path) -> dict:
     try:
-        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -79,6 +94,11 @@ def load_master() -> str:
 def save_master(text: str) -> None:
     MASTER_FILE.parent.mkdir(exist_ok=True)
     MASTER_FILE.write_text(text, encoding="utf-8")
+
+
+def save_confirmations(confirmations: dict) -> None:
+    CONFIRM_FILE.parent.mkdir(exist_ok=True)
+    CONFIRM_FILE.write_text(json.dumps(confirmations, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -126,24 +146,22 @@ def as_json(resume: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Versions: every tailoring / revision / edit is a new version; Undo pops one
+# Versions: every build / revision / edit is a new version; Undo pops one
 # --------------------------------------------------------------------------- #
 
 def versions() -> list[dict]:
     return st.session_state.setdefault("versions", [])
 
 
-def start_versions(result: dict, note: str, role: str) -> None:
+def start_versions(result: dict, note: str, role: str, keywords: list[str]) -> None:
     st.session_state["versions"] = [{"result": result, "note": note, "score": None}]
-    st.session_state.pop("cover_letter", None)  # it belonged to the previous job
+    st.session_state.pop("cover_letter", None)  # it belonged to the previous build
     # Keep the job's keywords fixed across versions so scores stay comparable
-    st.session_state["job_keywords"] = result["job_keywords"]
+    st.session_state["job_keywords"] = keywords or result["job_keywords"]
     st.session_state["filename"] = main.output_stem(result["resume"], role)  # Firstname-Lastname-Role
 
 
 def add_version(result: dict, note: str, score: int | None = None) -> None:
-    if not st.session_state.get("job_keywords"):
-        st.session_state["job_keywords"] = result["job_keywords"]
     versions().append({"result": result, "note": note, "score": score})
 
 
@@ -154,6 +172,27 @@ def undo() -> None:
 
 def pick_template(template_id: str) -> None:
     st.session_state["template"] = template_id
+
+
+def new_job() -> None:
+    """Keep the master resume and skill answers; clear everything about the previous job."""
+    for key in list(st.session_state):
+        if key in JOB_KEYS or key.startswith(JOB_KEY_PREFIXES):
+            del st.session_state[key]
+    st.session_state["notice_top"] = "Ready for a new job. Your resume and skill answers are kept."
+
+
+def reset_everything() -> None:
+    """Forget everything: resume, job, answers, results, job settings. Claude connection settings stay."""
+    st.session_state.clear()
+    st.cache_data.clear()
+    MASTER_FILE.unlink(missing_ok=True)
+    CONFIRM_FILE.unlink(missing_ok=True)
+    kept = {k: v for k, v in _read_json(SETTINGS_FILE).items() if k not in ("timezone",)}
+    if kept:
+        SETTINGS_FILE.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+    st.session_state["notice_top"] = ("Reset complete. Everything has been cleared. Please add (1) your master "
+                                      "resume, (2) the job description, (3) the job type.")
 
 
 # --------------------------------------------------------------------------- #
@@ -178,25 +217,33 @@ def run_claude(label: str, system: str, content: str, schema: dict | None = None
     return out
 
 
-def polish(result: dict, max_match: bool) -> dict:
-    """Safety nets after every Claude reply: all job keywords in (Max ATS match), length within limits."""
-    keywords = st.session_state.get("job_keywords", [])
-    resume, added = ats.ensure_keywords(result["resume"], keywords) if max_match else (result["resume"], [])
-    resume, _ = ats.trim_to_length(resume, keywords)
-    return {**result, "resume": resume,
-            "keywords_added": result["keywords_added"] + [{"keyword": k, "where": "Skills"} for k in added]}
+def polish(result: dict, ctx: dict) -> dict:
+    """Safety nets after every Claude reply: confirmed Basic/Learning skills on their lines, length in limits."""
+    resume = review.ensure_confirmed_lines(result["resume"], ctx["confirmations"], ctx["job_skills"])
+    resume, _ = ats.trim_to_length(resume, st.session_state.get("job_keywords", []))
+    return {**result, "resume": resume}
 
 
-def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report: str, ctx: dict) -> None:
+def build_resume(ctx: dict) -> None:
+    """Step 2: tailor from the master resume, then auto-improve to the target."""
+    out = run_claude("✍️ Claude is writing your tailored resume — usually 1-2 minutes…",
+                     *main.tailor_request(ctx["master"], ctx["job_text"], ctx["job_title"], ctx["settings"],
+                                          ctx["analysis"], ctx["confirmations"]))
+    if out:
+        start_versions(polish(out[0], ctx), f"Built · {out[1]}", ctx["job_title"], ctx["keywords"])
+        remember_master()
+        auto_improve(ctx["target"], ctx["max_rounds"], "", ctx)  # reruns the page when done
+
+
+def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> None:
     """Check → revise → re-check until the target score, no further gain, or max_rounds."""
     view = (ctx["template"], ctx["accent"], ctx["page"], ctx["font"], ctx["size"])
-    max_match = ctx["max_match"]
     with st.status("🚀 Improving your resume…", expanded=True) as status:
         for n in range(1, max_rounds + 1):
             keywords_json = json.dumps(st.session_state.get("job_keywords", []))
             resume = versions()[-1]["result"]["resume"]
             before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"])
-            first_with_input = n == 1 and bool(confirmed or ext_report)
+            first_with_input = n == 1 and bool(ext_report or ctx.get("new_answers"))
             if before.score >= target and not first_with_input:
                 status.write(f"Score {before.score} already meets your target of {target}.")
                 break
@@ -207,8 +254,8 @@ def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report
             progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(versions()) if v["score"] is not None)
             try:
                 new, usage = engines.run(engine_config(), *main.revision_request(
-                    ctx["master"], ctx["job_text"], resume, report_text, ctx["job_title"], progress,
-                    confirmed if n == 1 else None, max_match))
+                    ctx["master"], ctx["job_text"], resume, report_text, ctx["job_title"], ctx["settings"],
+                    ctx["analysis"], ctx["confirmations"], progress))
             except engines.EngineError as e:
                 status.update(label=f"❌ {e}", state="error")
                 return
@@ -217,7 +264,7 @@ def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report
                 st.session_state["job_keywords"] = merged
                 keywords_json = json.dumps(merged)
                 before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"])
-            new = polish(new, max_match)
+            new = polish(new, ctx)
             after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"], ctx["job_text"])
             if after.score < before.score and not first_with_input:
                 status.write(f"Round {n} would lower the score ({before.score} → {after.score}), so it was discarded.")
@@ -227,20 +274,70 @@ def auto_improve(target: int, max_rounds: int, confirmed: list[dict], ext_report
             if after.score >= target:
                 break
             if after.score == before.score:
-                status.write("No further gain from rewording alone — check the missing keywords and checklist.")
+                status.write("No further gain — the rest is usually skills you marked Learning / No.")
                 break
         final = versions()[-1]["score"]
         status.update(label=f"Done — ATS score {final}/100 (version {len(versions())})", state="complete",
                       expanded=False)
-    st.session_state["notice"] = f"Auto-improve finished: ATS score {final}/100 on version {len(versions())}."
+    st.session_state["notice"] = f"Your resume is ready: ATS score {final}/100 (version {len(versions())})."
     st.rerun()
+
+
+# --------------------------------------------------------------------------- #
+# Skill confirmations
+# --------------------------------------------------------------------------- #
+
+def skill_key(skill: str) -> str:
+    return skill.strip().lower()
+
+
+def confirm_widgets(skills: list[dict], saved_answers: dict) -> None:
+    """One Strong / Basic / Learning / No row per skill; answers live in st.session_state['confirm_<key>']."""
+    for s in skills:
+        key = f"confirm_{skill_key(s['skill'])}"
+        if key not in st.session_state and skill_key(s["skill"]) in saved_answers:
+            st.session_state[key] = saved_answers[skill_key(s["skill"])]["level"]
+        meta_bits = [b for b in (s.get("importance"), f"{s['mentions']}× in the job" if s.get("mentions") else "",
+                                 s.get("meaning")) if b]
+        label = f"**{s['skill']}**" + (f" · <span style='color:gray'>{' · '.join(meta_bits)}</span>"
+                                       if meta_bits else "")
+        st.markdown(label, unsafe_allow_html=True)
+        st.radio(s["skill"], main.CONFIRM_LEVELS, index=None, key=key, horizontal=True,
+                 label_visibility="collapsed", captions=[LEVEL_HELP[x].split(" →")[0] for x in main.CONFIRM_LEVELS])
+
+
+def answer_unanswered(skills: list[str], level: str) -> None:
+    for skill in skills:
+        st.session_state.setdefault(f"confirm_{skill_key(skill)}", level)
+        if st.session_state[f"confirm_{skill_key(skill)}"] is None:
+            st.session_state[f"confirm_{skill_key(skill)}"] = level
+
+
+def collect_answers(saved_answers: dict) -> dict:
+    """Saved answers updated with every answer given on this page."""
+    answers = dict(saved_answers)
+    for key, level in st.session_state.items():
+        if key.startswith("confirm_") and level in main.CONFIRM_LEVELS:
+            skill = key[len("confirm_"):]
+            answers[skill] = {"skill": answers.get(skill, {}).get("skill") or skill_names.get(skill, skill),
+                              "level": level}
+    return answers
+
+
+def manual_step(prompt: str, reply_key: str, button: str):
+    """Copy-paste mode: show a prompt, take Claude's reply. Returns the reply text when the button is clicked."""
+    st.markdown("**a.** Copy the prompt (📋 top-right of the box) → **b.** paste it into a "
+                "[new Claude chat](https://claude.ai/new) → **c.** paste Claude's whole reply below.")
+    st.code(prompt, language=None, height=140)
+    reply = st.text_area("Claude's reply", height=100, key=reply_key)
+    return reply if st.button(button, type="primary", width="stretch") else None
 
 
 # --------------------------------------------------------------------------- #
 # Sidebar: settings
 # --------------------------------------------------------------------------- #
 st.set_page_config(page_title="Resume Tailor", page_icon="📄", layout="wide")
-saved = load_settings()
+saved = _read_json(SETTINGS_FILE)
 cli_path = engines.find_claude_cli()
 
 with st.sidebar:
@@ -267,31 +364,46 @@ with st.sidebar:
 
     out_dir = st.text_input("Save-to folder (optional)", value=saved.get("out_dir", ""),
                             placeholder=r"G:\My Drive\Resumes", help="E.g. your Google Drive folder.")
-    remember = st.checkbox("Remember settings and my resume on this laptop", value=saved.get("remember", True),
+    remember = st.checkbox("Remember my resume, skill answers and settings on this laptop",
+                           value=saved.get("remember", True),
                            help="Stored in this app's folder only (settings.json, data/). Never uploaded.")
     settings = {"engine": engine, "api_key": api_key, "model_label": model_label, "effort": effort,
                 "out_dir": out_dir, "remember": remember,
-                "max_match": st.session_state.get("max_match", saved.get("max_match", True)),
-                "font": st.session_state.get("font", saved.get("font", ""))}
+                "font": st.session_state.get("font", saved.get("font", "")),
+                "timezone": st.session_state.get("timezone", saved.get("timezone", ""))}
     if remember and settings != saved:
         SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     elif not remember:
         SETTINGS_FILE.unlink(missing_ok=True)
         MASTER_FILE.unlink(missing_ok=True)
+        CONFIRM_FILE.unlink(missing_ok=True)
+
+saved_answers = _read_json(CONFIRM_FILE) if remember else {}
+
+# --------------------------------------------------------------------------- #
+# Header: new job / reset
+# --------------------------------------------------------------------------- #
+title_col, new_col, reset_col = st.columns([4, 1, 1], vertical_alignment="bottom")
+title_col.title("📄 Resume Tailor")
+new_col.button("🆕 New job", on_click=new_job, width="stretch",
+               help="Start the next application. Keeps your master resume and skill answers.")
+with reset_col.popover("♻️ Reset", width="stretch"):
+    st.markdown("Forget **everything**: master resume, job, skill answers and results.")
+    st.button("Yes, reset everything", on_click=reset_everything, type="primary")
+st.caption("Built fresh from your master resume for each job. Claude never claims a skill you haven't confirmed.")
+if notice := st.session_state.pop("notice_top", None):
+    st.info(notice)
 
 # --------------------------------------------------------------------------- #
 # 1-2. Resume and job
 # --------------------------------------------------------------------------- #
-st.title("📄 Resume Tailor")
-st.caption("Your resume + a job → tailored, ATS-checked, nicely designed. Claude never invents experience.")
-
 col_resume, col_job = st.columns(2, gap="large")
 with col_resume:
-    st.subheader("1 · Your resume")
+    st.subheader("1 · Your master resume")
     saved_master = load_master() if remember else ""
     master = ""
     if saved_master and not st.session_state.get("replace_master"):
-        st.success(f"Using your saved resume ({len(saved_master.split())} words).")
+        st.success(f"Using your saved master resume ({len(saved_master.split())} words).")
         with st.expander("Show saved resume"):
             st.text(saved_master[:4000])
         if st.button("Use a different resume"):
@@ -299,8 +411,9 @@ with col_resume:
             st.rerun()
         master = saved_master
     else:
-        uploaded = st.file_uploader("Upload your full resume", type=["docx", "json", "md", "txt"])
-        pasted = st.text_area("…or paste it", height=110)
+        uploaded = st.file_uploader("Upload your full resume (all roles, projects, skills)",
+                                    type=["docx", "json", "md", "txt"], key="upload_master")
+        pasted = st.text_area("…or paste it", height=110, key="paste_master")
         try:
             if uploaded is not None:
                 suffix = Path(uploaded.name).suffix
@@ -312,23 +425,123 @@ with col_resume:
                 master = pasted.strip()
         except Exception as e:  # malformed upload: bad JSON, not UTF-8, corrupt .docx
             st.error(f"Could not read the resume file: {e}")
+    if saved_answers:
+        st.caption(f"🧠 {len(saved_answers)} skill answers remembered from earlier jobs.")
 
 with col_job:
     st.subheader("2 · The job")
-    job_text = st.text_area("Job description", height=150, placeholder="Paste the full job posting").strip()
-    job_title = st.text_input("Exact job title", placeholder="Senior Backend Engineer",
+    job_text = st.text_area("Job description", height=150, placeholder="Paste the full job posting",
+                            key="job_text").strip()
+    job_title = st.text_input("Exact job title", placeholder="Senior Backend Engineer (or leave empty: "
+                              "taken from the posting)", key="job_title",
                               help="ATS checkers look for the exact title. Also names the file "
                                    "Firstname-Lastname-Role.pdf.").strip()
-    max_match = st.toggle(
-        "🎯 Max ATS match: add every job keyword", value=saved.get("max_match", True), key="max_match",
-        help="On: every keyword from the job goes into your resume (Skills plus a fitting bullet), aiming for "
-             "100%. Employers, titles, dates, degrees, certifications and numbers are never invented. "
-             "Off: only keywords your resume already proves.")
-    if max_match:
-        st.caption("Adds skills your resume doesn't show yet, so be ready to talk about each one in an interview.")
+    job_type = st.radio("Job type", main.JOB_TYPES, index=None, horizontal=True, key="job_type",
+                        help="Sets the line under your contact details. Picked fresh for every job.")
+    if job_type == "Remote":
+        st.session_state.setdefault("timezone", saved.get("timezone", ""))
+        st.text_input("Your time zone", placeholder="UTC+5", key="timezone",
+                      help="Shown as: Open to remote work (UTC+5)")
+    elif job_type == "Relocation":
+        loc_col, visa_col = st.columns(2)
+        loc_col.text_input("Relocate to (city, country)", placeholder="Berlin, Germany", key="location")
+        visa_col.text_input("Visa (optional)", placeholder="auto: e.g. EU Blue Card", key="visa")
+    with st.expander("Must include / must exclude (optional)"):
+        st.text_input("Must include", placeholder="e.g. my open-source project, German B1", key="must_include")
+        st.text_input("Must exclude", placeholder="e.g. my freelance work, PHP", key="must_exclude")
 
-ready = bool(master and job_text)
+target_settings = {"job_type": job_type or "", "timezone": st.session_state.get("timezone", ""),
+                   "location": st.session_state.get("location", ""), "visa": st.session_state.get("visa", ""),
+                   "must_include": st.session_state.get("must_include", ""),
+                   "must_exclude": st.session_state.get("must_exclude", "")}
 
+
+def remember_master() -> None:
+    if remember and master and master != saved_master:
+        save_master(master)
+    st.session_state["replace_master"] = False
+
+
+# --------------------------------------------------------------------------- #
+# 3. Analyse the job and confirm skills
+# --------------------------------------------------------------------------- #
+st.divider()
+st.subheader("3 · Skills the job asks for")
+fingerprint = hash((master, job_text, job_title))
+analysis = st.session_state.get("analysis") if st.session_state.get("analysis_for") == fingerprint else None
+claude_ready = engine != ENGINE_CODE or bool(cli_path)
+
+
+def store_analysis(result: dict) -> None:
+    st.session_state["analysis"] = result
+    st.session_state["analysis_for"] = fingerprint
+    st.session_state["auto_build"] = True  # build straight away if every skill is already answered
+    remember_master()
+
+
+if not (master and job_text):
+    st.info("Add your master resume and the job description, then analyse the job.")
+elif engine == ENGINE_MANUAL and not analysis:
+    with st.expander("🔍 Analyse the job with claude.ai (copy-paste)", expanded=True):
+        reply = manual_step(main.manual_prompt(*main.analysis_request(master, job_text, job_title),
+                                               main.ANALYSIS_SCHEMA), "analysis_reply", "🔍 Read the analysis")
+        if reply is not None:
+            try:
+                store_analysis(main.parse_analysis(reply))
+                st.rerun()
+            except main.TailorError as e:
+                st.error(str(e))
+elif engine != ENGINE_MANUAL:
+    if st.button("🔁 Analyse again" if analysis else "🔍 Analyse the job", disabled=not claude_ready,
+                 type="secondary" if analysis else "primary", width="content" if analysis else "stretch"):
+        out = run_claude("🔍 Claude is reading the job and comparing it with your resume…",
+                         *main.analysis_request(master, job_text, job_title), main.ANALYSIS_SCHEMA)
+        if out:
+            store_analysis(out[0])
+            st.rerun()
+
+skill_names: dict[str, str] = {}
+confirmations: dict = {}
+unanswered: list[str] = []
+if analysis:
+    title = job_title or analysis["job_title"]
+    info = [f"**{title}**"] + [x for x in (analysis["company"], analysis["job_location"], analysis["seniority"]) if x]
+    st.markdown(" · ".join(info))
+    skills = analysis["skills"]
+    skill_names = {skill_key(s["skill"]): s["skill"] for s in skills}
+    strong = [s for s in skills if s["group"] == "A"]
+    transferable = [s for s in skills if s["group"] == "B"]
+    to_confirm = [s for s in skills if s["group"] not in ("A", "B")]
+    if strong:
+        st.markdown("✅ **In your resume:** " + " ".join(f":green-background[{s['skill']}]" for s in strong))
+    if transferable:
+        st.markdown("🔁 **Transferable:** " + " ".join(f":blue-background[{s['skill']} ← {s['evidence']}]"
+                                                      for s in transferable))
+    if to_confirm:
+        st.markdown(f"❓ **Not in your resume — how well do you know these?** ({len(to_confirm)})")
+        st.caption("Interviewers ask about every skill listed, so only Strong and Basic go on your resume. "
+                   "Your answers are remembered for future jobs.")
+        b1, b2, _ = st.columns([1, 1, 2])
+        names = [s["skill"] for s in to_confirm]
+        b1.button("Mark unanswered as Basic", on_click=answer_unanswered, args=(names, "Basic"), width="stretch")
+        b2.button("Mark unanswered as No", on_click=answer_unanswered, args=(names, "No"), width="stretch")
+        confirm_widgets(to_confirm, saved_answers)
+    else:
+        st.success("Every skill in this job is already shown in your resume.")
+
+    answers = collect_answers(saved_answers)
+    if remember and answers != saved_answers:
+        save_confirmations(answers)
+    # This job's skills, plus keywords added later (e.g. from an external checker's report)
+    job_keys = {skill_key(s["skill"]) for s in skills} | {skill_key(k) for k in st.session_state.get("job_keywords", [])}
+    confirmations = {k: v for k, v in answers.items() if k in job_keys}
+    unanswered = [s["skill"] for s in to_confirm if skill_key(s["skill"]) not in confirmations]
+else:
+    title = job_title
+
+# --------------------------------------------------------------------------- #
+# Shared context for building and improving
+# --------------------------------------------------------------------------- #
 if st.session_state.get("template") not in render.TEMPLATES:
     st.session_state["template"] = next(iter(render.TEMPLATES))
 template = st.session_state["template"]
@@ -339,50 +552,45 @@ font = st.session_state.get("font") or saved.get("font", "")
 font = font if font in render.FONTS else next(iter(render.FONTS))
 size = st.session_state.get("text_size", "Normal")
 look = (template, accent, page, font, size)
-ctx = {"template": template, "accent": accent, "page": page, "font": font, "size": size, "job_title": job_title,
-       "master": master, "job_text": job_text, "max_match": max_match}
-target = st.session_state.get("target", 100 if max_match else 90)
+target = st.session_state.get("target", 95)
 max_rounds = st.session_state.get("max_rounds", 3)
-
-
-def remember_master() -> None:
-    if remember and master and master != saved_master:
-        save_master(master)
-    st.session_state["replace_master"] = False
-
+job_skills = [s["skill"] for s in analysis["skills"]] if analysis else []
+job_skills += [k for k in st.session_state.get("job_keywords", []) if k not in job_skills and k != title]
+ctx = {"template": template, "accent": accent, "page": page, "font": font, "size": size, "job_title": title,
+       "master": master, "job_text": job_text, "settings": target_settings, "analysis": analysis,
+       "confirmations": confirmations, "job_skills": job_skills,
+       "keywords": list(dict.fromkeys(job_skills + ([title] if title else []))),
+       "target": target, "max_rounds": max_rounds}
 
 # --------------------------------------------------------------------------- #
-# 3. Tailor
+# 4. Build
 # --------------------------------------------------------------------------- #
-if engine == ENGINE_MANUAL:
-    with st.expander("✨ Tailor with claude.ai (copy-paste)", expanded=not versions()):
-        if ready:
-            st.markdown("**a.** Copy the prompt (📋 top-right of the box) → **b.** paste it into a "
-                        "[new Claude chat](https://claude.ai/new) → **c.** paste Claude's whole reply below.")
-            st.code(main.build_manual_prompt(master, job_text, job_title, max_match), language=None, height=150)
-        else:
-            st.info("Add your resume and the job description first.")
-        reply = st.text_area("Claude's reply", height=110, key="tailor_reply")
-        if st.button("✨ Create my resume", type="primary", width="stretch"):
-            try:
-                start_versions(main.parse_claude_reply(reply), "Tailored with claude.ai", job_title)
-                versions()[0]["result"] = polish(versions()[0]["result"], max_match)
-                remember_master()
-                st.rerun()
-            except main.TailorError as e:
-                st.error(str(e))
-else:
-    if st.button(f"✨ Tailor my resume and optimize to {target}%", type="primary", width="stretch",
-                 disabled=not ready or (engine == ENGINE_CODE and not cli_path),
-                 help="Tailors, then runs Auto-improve rounds until the target score." if ready
-                 else "Add your resume and the job description first."):
-        out = run_claude("✍️ Claude is tailoring your resume — usually under a minute…",
-                         *main.tailor_request(master, job_text, job_title, max_match))
-        if out:
-            start_versions(out[0], f"Tailored · {out[1]}", job_title)
-            versions()[0]["result"] = polish(out[0], max_match)
-            remember_master()
-            auto_improve(target, max_rounds, [], "", ctx)  # reruns the page when done
+auto_build = st.session_state.pop("auto_build", False)  # set once, right after an analysis
+if analysis:
+    missing_bits = (["the job type"] if not job_type else []) + \
+                   ([f"{len(unanswered)} skill answer{'s' if len(unanswered) != 1 else ''}"] if unanswered else [])
+    can_build = not missing_bits and claude_ready
+    if missing_bits:
+        st.warning("To build your resume, choose " + " and ".join(missing_bits) + ".")
+    if engine == ENGINE_MANUAL:
+        if can_build:
+            with st.expander("✨ Build with claude.ai (copy-paste)", expanded=not versions()):
+                reply = manual_step(main.manual_prompt(*main.tailor_request(
+                    master, job_text, title, target_settings, analysis, confirmations)),
+                    "tailor_reply", "✨ Create my resume")
+                if reply is not None:
+                    try:
+                        result = main.parse_claude_reply(reply)
+                        start_versions(polish(result, ctx), "Built with claude.ai", title, ctx["keywords"])
+                        remember_master()
+                        st.rerun()
+                    except main.TailorError as e:
+                        st.error(str(e))
+    else:
+        clicked = st.button(f"✨ Build my resume and optimize to {target}%", type="primary", width="stretch",
+                            disabled=not can_build)
+        if clicked or (auto_build and can_build):
+            build_resume(ctx)
 
 if not versions():
     st.stop()
@@ -401,29 +609,36 @@ filename = main.safe_filename(st.session_state.get("filename", "")) or "resume"
 try:
     with st.spinner("Rendering and checking…"):
         pdf_bytes, docx_bytes, pages = make_files(resume_json, *look)
-        report = ats_check(resume_json, *look, json.dumps(job_keywords), job_title, job_text)
+        report = ats_check(resume_json, *look, json.dumps(job_keywords), title, job_text)
 except render.RenderError as e:
     st.error(str(e))
     st.stop()
 current["score"] = report.score
 previous = vs[-2]["score"] if len(vs) > 1 else None
+match_before = ats.keyword_coverage(master, job_keywords)
+match_after = round(100 * len(report.matched) / len(job_keywords)) if job_keywords else 0
+issues = review.review(resume, master, confirmations, analysis, target_settings)
 
 st.divider()
 if notice := st.session_state.pop("notice", None):
     st.success(notice)
-score_col, words_col, version_col, actions_col = st.columns([1, 1, 1, 1.6])
+score_col, match_col, words_col, actions_col = st.columns([1, 1, 1, 1.6])
 score_col.metric("ATS score (built-in)", f"{report.score}/100",
                  delta=None if previous is None else report.score - previous)
-words_col.metric("Words", report.words, help=f"Most checkers want {ats.WORDS_MIN}-{ats.WORDS_MAX}.")
-version_col.metric("Version", f"v{len(vs)}", help=current["note"])
+match_col.metric("Keyword match", f"{match_after}%", delta=f"{match_after - match_before:+d} vs master",
+                 help=f"Job keywords in your master resume: {match_before}%. In this version: {match_after}%.")
+words_col.metric("Words · version", f"{report.words} · v{len(vs)}", help=current["note"])
 with actions_col:
     st.download_button(f"⬇️ Download PDF · {meta['label']}", pdf_bytes, f"{filename}.pdf",
                        mime="application/pdf", type="primary", width="stretch")
     if len(vs) > 1:
         st.button(f"↩️ Undo — back to v{len(vs) - 1}", on_click=undo, width="stretch")
+if issues:
+    st.warning(f"🔎 {len(issues)} thing{'s' if len(issues) != 1 else ''} to review before you send it — "
+               "see the **ATS report** tab.")
 
-tab_improve, tab_design, tab_cover, tab_edit = st.tabs(
-    ["📈 Improve ATS score", "🎨 Design & download", "✉️ Cover letter", "✏️ Edit text"])
+tab_improve, tab_report, tab_design, tab_cover, tab_edit = st.tabs(
+    ["📈 Improve ATS score", "📋 ATS report", "🎨 Design & download", "✉️ Cover letter", "✏️ Edit text"])
 
 # --------------------------------------------------------------------------- #
 # Tab: Improve
@@ -457,77 +672,43 @@ with tab_improve:
                 st.markdown(" ".join(f":green-background[{tag(k)}]" for k in report.matched))
             if report.missing:
                 st.markdown(" ".join(f":red-background[{tag(k)}]" for k in report.missing))
-            st.caption(f"{len(report.matched)} of {len(job_keywords)} found.")
-        else:
-            st.caption("Keyword matching appears after tailoring with a job description.")
-
-        # One-click unlock for keywords Claude couldn't prove from the resume
-        candidates = list(result["keywords_not_added"])
-        known = {k["keyword"].lower() for k in candidates}
-        candidates += [{"keyword": k, "reason": "Not in your resume yet.", "suggestions": []}
-                       for k in report.missing if k.lower() not in known]
-        confirmed = []
-        roles = [j["company"] or j["title"] for j in resume["experience"]] + [p["name"] for p in resume["projects"]]
-        if max_match:  # every keyword is added automatically; only missing credentials remain
-            if result["keywords_not_added"]:
-                st.info("Not added (needs a real credential): "
-                        + ", ".join(k["keyword"] for k in result["keywords_not_added"]))
-        elif candidates:
-            with st.expander(f"🔓 Missing keywords you might have ({len(candidates)}) — click the true ones"):
-                st.caption("Claude only adds what your resume proves. If you have done one of these, pick an "
-                           "option and the next round adds it. Leave the rest on Skip.")
-                for i, k in enumerate(candidates):
-                    options = [("skip", None, None)]
-                    options += [(s["level"].lower(), s["where"], s["text"])
-                                for s in k.get("suggestions", []) if s["text"]]
-                    if "basic" not in {o[0] for o in options}:
-                        options.append(("basic", "Skills", k["keyword"]))
-                    if roles:
-                        options.append(("work", None, None))
-
-                    def label(o):
-                        level, where, text = o
-                        return {"skip": "Skip — not true for me",
-                                "basic": f"I know the basics → add “{text}” to Skills",
-                                "work": "I used it at work → pick where"}.get(
-                            level, f"I've done this at {where} → add: “{text}”")
-
-                    st.markdown(f"**{k['keyword']}** <span style='color:gray'>— {k['reason']}</span>",
-                                unsafe_allow_html=True)
-                    level, where, text = st.radio(k["keyword"], options, format_func=label,
-                                                  key=f"kw_{len(vs)}_{i}", label_visibility="collapsed")
-                    if level == "basic":
-                        confirmed.append({"keyword": k["keyword"], "note": f"Skills only (basic level), as: {text}"})
-                    elif level == "work":
-                        role = st.selectbox("Where?", roles, key=f"kw_role_{len(vs)}_{i}")
-                        confirmed.append({"keyword": k["keyword"],
-                                          "note": f"used it at {role}; add it to Skills and one bullet there, kept general"})
-                    elif level != "skip":
-                        confirmed.append({"keyword": k["keyword"], "note": f"used it at {where}; suggested bullet: {text}"})
-                if confirmed:
-                    st.success("Next round adds: " + ", ".join(c["keyword"] for c in confirmed))
+            st.caption(f"{len(report.matched)} of {len(job_keywords)} found. Red ones are usually skills you "
+                       "marked Learning / No — they stay out on purpose.")
+        # Keywords added later (e.g. from an external report) that you haven't answered yet
+        extra = [{"skill": k} for k in report.missing if skill_key(k) not in skill_names
+                 and skill_key(k) not in saved_answers and skill_key(k) != skill_key(title)]
+        if extra:
+            with st.expander(f"❓ New keywords to answer ({len(extra)})"):
+                confirm_widgets(extra, saved_answers)
+                for e in extra:
+                    skill_names.setdefault(skill_key(e["skill"]), e["skill"])
+                answers = collect_answers(saved_answers)
+                if remember and answers != saved_answers:
+                    save_confirmations(answers)
+                confirmations.update({skill_key(e["skill"]): answers[skill_key(e["skill"])] for e in extra
+                                      if skill_key(e["skill"]) in answers})
+                ctx["new_answers"] = any(skill_key(e["skill"]) in answers for e in extra)
 
     st.divider()
     st.markdown("**Your ATS checker scored it lower?** Paste its report (select all on its results page, copy, "
-                "paste). The next round adds every keyword it lists as missing, and the built-in score tracks "
-                "them from then on.")
+                "paste). Missing keywords you have are added; the rest stay listed as gaps.")
     ext_report = st.text_area("External ATS checker report (optional)", height=100, key=f"ext_report_{len(vs)}",
                               label_visibility="collapsed",
                               placeholder="Paste the Jobscan / Resume Worded / Enhancv report here").strip()
 
     if engine == ENGINE_MANUAL:
-        st.markdown("**Improve with claude.ai** — copy the prompt → paste into Claude → paste the reply below.")
+        st.markdown("**Improve with claude.ai**")
         report_text = report.as_text() + (f"\n\nReport from an external ATS checker:\n{ext_report}" if ext_report else "")
         progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(vs) if v["score"] is not None)
-        st.code(main.build_revision_prompt(master, job_text, resume, report_text, job_title, progress, confirmed,
-                                           max_match), language=None, height=130)
-        reply = st.text_area("Claude's reply", height=100, key=f"revision_reply_{len(vs)}")
-        if st.button(f"🔁 Create version {len(vs) + 1}", type="primary", width="stretch"):
+        reply = manual_step(main.manual_prompt(*main.revision_request(
+            master, job_text, resume, report_text, title, target_settings, analysis, confirmations, progress)),
+            f"revision_reply_{len(vs)}", f"🔁 Create version {len(vs) + 1}")
+        if reply is not None:
             try:
                 new = main.parse_claude_reply(reply)
                 if ext_report:
                     st.session_state["job_keywords"] = list(dict.fromkeys(job_keywords + new["job_keywords"]))
-                add_version(polish(new, max_match), "Revised with claude.ai")
+                add_version(polish(new, ctx), "Revised with claude.ai")
                 st.rerun()
             except main.TailorError as e:
                 st.error(str(e))
@@ -538,7 +719,7 @@ with tab_improve:
         go_col.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
         if go_col.button("🚀 Auto-improve", type="primary", width="stretch",
                          help="Check → Claude revises → re-check, until the target or no further gain."):
-            auto_improve(target, max_rounds, confirmed, ext_report, ctx)
+            auto_improve(target, max_rounds, ext_report, ctx)
 
     if len(vs) > 1:
         st.markdown("**History**")
@@ -549,12 +730,54 @@ with tab_improve:
                       for i, v in enumerate(vs)], hide_index=True, width="stretch")
 
 # --------------------------------------------------------------------------- #
+# Tab: ATS report (Part B — stays in the app, never exported)
+# --------------------------------------------------------------------------- #
+with tab_report:
+    part_b = result["report"]
+    st.caption("This report stays in the app. Only the resume itself is exported.")
+    st.markdown("**🔎 Review before export**")
+    if issues:
+        for msg in issues:
+            st.markdown(f"⚠️ {msg}")
+    else:
+        st.markdown("✅ Nothing to review: every skill is backed by your resume or your answers, no duplicates, "
+                    "headline fits one line, location line matches the job type, and every number is real.")
+
+    m1, m2 = st.columns(2)
+    m1.markdown(f"**Keyword match:** {match_before}% in your master resume → **{match_after}%** now")
+    m1.progress(match_after / 100)
+    m2.markdown(f"**Job type & location line:** {job_type or 'not set'} — "
+                f"{resume.get('availability') or part_b['location_line_used'] or 'none (local job)'}")
+
+    groups = {g: [s for s in part_b["skill_groups"] if s["group"].strip().upper()[:1] == g] for g in "ABCD"}
+    names = {"A": "A · Strong", "B": "B · Transferable", "C": "C · Basic", "D": "D · Not known"}
+    for col, g in zip(st.columns(4), "ABCD"):
+        col.markdown(f"**{names[g]}** ({len(groups[g])})")
+        for s in groups[g]:
+            col.markdown(f"- {s['skill']}" + (f" <span style='color:gray'>— {s['note']}</span>" if s["note"] else ""),
+                         unsafe_allow_html=True)
+
+    if part_b["keywords_covered"]:
+        with st.expander(f"Keywords covered ({len(part_b['keywords_covered'])}) and where they appear"):
+            st.dataframe(part_b["keywords_covered"], hide_index=True, width="stretch")
+    if part_b["gaps"]:
+        st.markdown("**Gaps & quick wins**")
+        for g in part_b["gaps"]:
+            st.markdown(f"- **{g['skill']}** — {g['plan']}")
+    if part_b["interview_prep"]:
+        st.markdown("**Interview prep**")
+        for q in part_b["interview_prep"]:
+            st.markdown(f"- **{q['skill']}** — {q['talking_point']}")
+    if part_b["cover_letter_angle"]:
+        st.markdown(f"**Cover letter angle:** {part_b['cover_letter_angle']}")
+
+# --------------------------------------------------------------------------- #
 # Tab: Design & download
 # --------------------------------------------------------------------------- #
 with tab_design:
     try:
         with st.spinner("Rendering all designs…"):
-            gallery = make_gallery(as_json(vs[0]["result"]["resume"]), page)  # once per tailoring
+            gallery = make_gallery(as_json(vs[0]["result"]["resume"]), page)  # once per build
     except render.RenderError as e:
         st.error(str(e))
         gallery = {}
@@ -605,30 +828,16 @@ with tab_design:
             st.image(png, width="stretch")
 
 # --------------------------------------------------------------------------- #
-# Tab: Edit
-# --------------------------------------------------------------------------- #
-with tab_edit:
-    st.caption("Change any wording, then Apply. Your edit becomes a new version; Undo restores the previous one.")
-    edited = st.text_area("Resume (JSON)", resume_json, height=420, key=f"edit_{len(vs)}",
-                          label_visibility="collapsed")
-    if st.button("Apply edits", width="stretch"):
-        try:
-            add_version({**result, "resume": main.parse_claude_reply(edited)["resume"]}, "Edited by hand")
-            st.rerun()
-        except main.TailorError as e:
-            st.error(str(e))
-
-# --------------------------------------------------------------------------- #
 # Tab: Cover letter
 # --------------------------------------------------------------------------- #
 with tab_cover:
     st.caption("A cover letter for this job, written from your current resume version, in the same design.")
     letter = st.session_state.get("cover_letter")
+    angle = result["report"]["cover_letter_angle"]
     if engine == ENGINE_MANUAL:
-        st.markdown("Copy the prompt → paste into a [new Claude chat](https://claude.ai/new) → paste the reply below.")
-        st.code(main.build_cover_letter_prompt(resume, job_text, job_title), language=None, height=120)
-        reply = st.text_area("Claude's reply", height=100, key="cover_reply")
-        if st.button("✉️ Create cover letter", type="primary", width="stretch"):
+        reply = manual_step(main.build_cover_letter_prompt(resume, job_text, title, angle), "cover_reply",
+                            "✉️ Create cover letter")
+        if reply is not None:
             try:
                 st.session_state["cover_letter"] = main.parse_cover_letter(reply)
                 st.rerun()
@@ -637,7 +846,7 @@ with tab_cover:
     elif st.button("✉️ Write my cover letter" if not letter else "🔁 Write a new cover letter",
                    type="primary", width="stretch", disabled=not job_text):
         out = run_claude("✉️ Claude is writing your cover letter…",
-                         *main.cover_letter_request(resume, job_text, job_title), main.COVER_LETTER_SCHEMA)
+                         *main.cover_letter_request(resume, job_text, title, angle), main.COVER_LETTER_SCHEMA)
         if out:
             st.session_state["cover_letter"] = out[0]
             st.rerun()
@@ -665,3 +874,17 @@ with tab_cover:
                                      mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             for png in cover_pages:
                 st.image(png, width="stretch")
+
+# --------------------------------------------------------------------------- #
+# Tab: Edit
+# --------------------------------------------------------------------------- #
+with tab_edit:
+    st.caption("Change any wording, then Apply. Your edit becomes a new version; Undo restores the previous one.")
+    edited = st.text_area("Resume (JSON)", resume_json, height=420, key=f"edit_{len(vs)}",
+                          label_visibility="collapsed")
+    if st.button("Apply edits", width="stretch"):
+        try:
+            add_version({**result, "resume": main.parse_claude_reply(edited)["resume"]}, "Edited by hand")
+            st.rerun()
+        except main.TailorError as e:
+            st.error(str(e))

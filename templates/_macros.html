@@ -2,6 +2,7 @@
 
 {% macro contact(r, cls="contact") -%}
 <div class="{{ cls }}">{% for c in r.contact %}<span>{{ c | link }}</span>{% endfor %}</div>
+{%- if r.availability %}<div class="availability">{{ r.availability }}</div>{% endif %}
 {%- endmacro %}
 
 {% macro bullets(items) -%}

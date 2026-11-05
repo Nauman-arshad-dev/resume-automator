@@ -128,6 +128,9 @@ def _has_keyword(text_lower: str, keyword: str) -> bool:
     return bool(k) and re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", text_lower) is not None
 
 
+has_keyword = _has_keyword  # public name, used by review.py and the app
+
+
 def _count(text_lower: str, keyword: str) -> int:
     k = keyword.lower().strip()
     return len(re.findall(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", text_lower)) if k else 0
@@ -143,18 +146,12 @@ def resume_text(resume: dict) -> str:
     return walk(resume)
 
 
-def ensure_keywords(resume: dict, keywords: list[str]) -> tuple[dict, list[str]]:
-    """Max ATS match safety net: put any job keyword Claude still left out into Skills.
-
-    Returns (resume, keywords added). The resume is copied, never changed in place.
-    """
-    text = resume_text(resume).lower()
-    missing = [k for k in dict.fromkeys(k.strip() for k in keywords if k.strip()) if not _has_keyword(text, k)]
-    if not missing:
-        return resume, []
-    resume = {**resume, "skills": list(resume["skills"])}
-    resume["skills"].append("Additional: " + ", ".join(missing))
-    return resume, missing
+def keyword_coverage(text: str, keywords: list[str]) -> int:
+    """Percent of keywords found in text (e.g. the master resume, for the before/after meter)."""
+    keywords = [k for k in dict.fromkeys(k.strip() for k in keywords) if k]
+    if not keywords:
+        return 0
+    return round(100 * sum(_has_keyword(text.lower(), k) for k in keywords) / len(keywords))
 
 
 def count_words(text: str) -> int:

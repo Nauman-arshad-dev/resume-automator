@@ -71,6 +71,7 @@ RESUME_SCHEMA = _obj({
     "name": _STR,
     "headline": _STR,  # short professional title, e.g. "Backend Engineer | Node.js, AWS"
     "contact": _STR_LIST,  # e.g. ["email", "phone", "city", "linkedin url"]
+    "availability": _STR,  # e.g. "Open to remote work (UTC+5)", "" for local jobs
     "summary": _STR,
     "skills": _STR_LIST,
     "experience": {"type": "array", "items": _obj({
@@ -93,95 +94,123 @@ RESUME_SCHEMA = _obj({
     "certifications": _STR_LIST,
 })
 
-RESPONSE_SCHEMA = _obj({
-    "resume": RESUME_SCHEMA,
-    "job_keywords": _STR_LIST,  # key terms of the job posting, used by the built-in ATS check
-    "keywords_added": {"type": "array", "items": _obj({
-        "keyword": _STR,
-        "where": _STR,
+_INT = {"type": "integer"}
+
+# Step 1: analyse the job against the master resume, before anything is written.
+ANALYSIS_SCHEMA = _obj({
+    "job_title": _STR,
+    "title_variants": _STR_LIST,
+    "company": _STR,
+    "job_location": _STR,  # city / country of the role as the posting states it, "" if not stated
+    "skills": {"type": "array", "items": _obj({
+        "skill": _STR,       # the posting's exact wording
+        "importance": _STR,  # "required" | "nice to have"
+        "mentions": _INT,
+        "group": _STR,       # "A" in the master resume | "B" transferable | "unconfirmed"
+        "evidence": _STR,    # A: where in the resume; B: the candidate's equivalent skill
+        "meaning": _STR,     # what the term means at this company, when not obvious
     })},
-    "keywords_not_added": {"type": "array", "items": _obj({
-        "keyword": _STR,
-        "reason": _STR,
-        # One-click options for the candidate, used only if they confirm the keyword is true
-        "suggestions": {"type": "array", "items": _obj({
-            "level": _STR,  # "basic" (Skills only) or "experienced" (bullet in a role/project)
-            "where": _STR,  # "Skills" or the role/project, e.g. "Syntivis AG"
-            "text": _STR,   # the Skills entry or the ready-to-use bullet
-        })},
-    })},
+    "responsibilities": _STR_LIST,
+    "domain_keywords": _STR_LIST,
+    "seniority": _STR,
 })
 
-STRICT_KEYWORD_RULES = """- Truthfulness comes first. Only use facts present in the master resume. Never invent employers, titles, dates, degrees, certifications, metrics, tools, or responsibilities.
-- Add a missing keyword only where the existing experience genuinely supports it (for example, rephrasing "built data pipelines in Python" to mention "ETL" is fine; adding "Kubernetes" to a role that never mentions containers is not). Weave keywords into existing bullets, the summary, or the skills list in natural language; do not keyword-stuff.
-- If a keyword cannot be added honestly, leave it out and list it under keywords_not_added with a short reason, so the candidate can decide whether it truly applies.
-- For each keywords_not_added item, give 1-3 suggestions the candidate can pick with one click IF it is true for them: one with level "basic" (where "Skills", text = the Skills entry, e.g. "GCP (basics)"), and, when an existing role or project plausibly involved it, one or two with level "experienced" (where = that role's company or project name, text = a ready-to-use bullet for that entry, consistent with what the resume says about it, with no invented metrics). The candidate decides what is true; these are options, not claims."""
+ANALYSIS_PROMPT = """You are an expert recruiter and ATS analyst. Analyse ONE job description against the candidate's master resume, before any resume is written.
 
-# The candidate opted in to matching every job keyword (they vouch for the skills).
-# Hard, checkable facts stay fixed either way.
-MAX_MATCH_RULES = """- Max ATS match is on: the candidate wants EVERY job keyword in the resume and vouches for having at least basic experience with each. Your goal is a 100% keyword match.
-- Facts that stay fixed: employers, job titles, dates, degrees, schools, certifications and existing numbers. Never invent or change these, and never invent metrics.
-- Add every job keyword to Skills, in the posting's exact wording. Then also weave each important keyword into the summary or a bullet of the most plausible role or project, at a level that fits that role (e.g. "Used Terraform to provision staging environments" in a DevOps-adjacent role), so it appears in context, not only in a list. New bullets are fine where needed; keep them plausible for that role's field and time.
-- Keywords the posting repeats should appear 2-3 times (Skills plus one or two bullets or the summary); never more. Do not stuff lists of keywords into one bullet.
-- Where the posting uses both an acronym and its full form (or the resume uses the other one), include both once, e.g. "Continuous Integration (CI/CD)".
-- Credentials the resume doesn't have (a certification, degree, license or clearance): never claim them. Use the underlying skill instead (e.g. "Scrum" for "Certified ScrumMaster") and list the credential under keywords_not_added with the reason "credential", with no suggestions.
-- keywords_not_added holds only those credentials; every other keyword goes in keywords_added."""
+Return:
+- job_title: the exact job title from the posting (never a section heading such as "About the Role"); title_variants: 1-4 close variants.
+- company and job_location: as the posting states them; empty strings if not stated. Never guess.
+- skills: every hard skill in the posting (languages, frameworks, databases, cloud, tools, platforms, methods, certifications), in the posting's exact wording and spelling, most important first. importance: "required" or "nice to have". mentions: how many times the posting mentions it. meaning: one short phrase on what the term means at this company when that is not obvious (e.g. "static analysis" at a mobile-app data company means analysing app binaries at scale, not linting pull requests), otherwise "".
+  group, judged strictly against the master resume:
+  - "A": clearly shown in the master resume. evidence = the role or project that shows it.
+  - "B": not named, but the candidate has a clear equivalent (the job says NestJS and the resume has Node.js/Express; the job says GCP and the resume has AWS). evidence = the equivalent from the resume.
+  - "unconfirmed": not in the master resume and no clear equivalent. The candidate will be asked about it. evidence = "".
+- responsibilities: the 5-8 main things the person will do.
+- domain_keywords: industry, product type and scale terms (e.g. fintech, payments, data pipelines, high-throughput).
+- seniority: years of experience, leadership, ownership or mentoring signals, in one line."""
 
-COMMON_RULES = """- Keep every role, project, and education entry, in the original order, with the original titles, companies, and dates. You may reorder bullets within a role to put the most relevant first, and reorder the skills list.
-- Bullets prove results, not duties: Action verb + what you did + measurable result, e.g. "Reduced page load time by 35% by splitting bundles and lazy loading images." Start with verbs like Built, Led, Automated, Launched, Reduced; never "Responsible for", "Worked on", "Helped" or "Duties included". Use real numbers from the master resume (users, revenue, time saved, tickets, accuracy) and preserve them exactly. Keep bullets concise (ideally one line, at most two).
-- Write every role as bullet points, never as paragraphs: 3-6 bullets for recent or relevant roles, 1-3 for older ones, the most relevant bullet first.
-- Never use first-person pronouns (I, me, my) or empty buzzwords (team player, hard worker, results-driven, go-getter); show the skill with a concrete example instead.
-- Keep the whole resume to 450-750 words (never over 750) by trimming the least relevant bullets, not by dropping roles.
-- Rewrite the summary to target this role in 2-3 sentences (title, years of experience, top skills), using only facts from the resume. Put the job's most important skills near the top: in the summary, the first Skills entries and the first bullet of each recent role.
-- Mirror the job post's exact spelling for tools, skills and titles (e.g. "JavaScript", not "Javascript"; "customer support", not "client help"). Write an acronym together with its full term once, e.g. "search engine optimisation (SEO)".
-- headline is a short professional title line (under 90 characters, e.g. "Backend Engineer | Node.js, AWS") targeted to this role and based on the resume. If a target job title is given, start the headline with it verbatim and mention it in the summary. Put only contact details (email, phone, location, links) in contact, never a title or tagline.
-- skills: plain-text entries; group related tools as "Category: tool, tool, tool".
-- Use empty strings or empty lists for fields the master resume does not have.
-- In keywords_added, list each keyword you integrated and where (e.g. "Skills", "Acme Corp bullet 2").
-- job_keywords: the 25-40 keywords an ATS checker (like Jobscan) would scan this job posting for: every hard skill, tool, platform, programming language, framework, method, domain term and certification, plus the 3-6 most stressed soft skills (e.g. "communication", "stakeholder management"). Each 1-3 words, in the posting's own wording and spelling. Skip generic words like "team", "experience" or "ability". If no job description is given, return an empty list."""
+RESPONSE_SCHEMA = _obj({
+    "resume": RESUME_SCHEMA,
+    "job_keywords": _STR_LIST,  # every job skill + the title, used by the built-in ATS check
+    "report": _obj({  # Part B: shown in the app, never exported
+        "keywords_covered": {"type": "array", "items": _obj({"keyword": _STR, "where": _STR})},
+        "location_line_used": _STR,
+        "skill_groups": {"type": "array", "items": _obj({"skill": _STR, "group": _STR, "note": _STR})},
+        "gaps": {"type": "array", "items": _obj({"skill": _STR, "plan": _STR})},
+        "interview_prep": {"type": "array", "items": _obj({"skill": _STR, "talking_point": _STR})},
+        "cover_letter_angle": _STR,
+    }),
+})
 
+TAILOR_PROMPT = """You are an expert resume writer and ATS optimization engine. Your only goal is to turn the candidate's resume into the strongest possible match for ONE specific job, so it scores highly in ATS scans, passes a 10-second recruiter screen and gets the candidate an interview.
 
-def tailor_rules(max_match: bool = False) -> str:
-    return "Rules:\n" + (MAX_MATCH_RULES if max_match else STRICT_KEYWORD_RULES) + "\n" + COMMON_RULES
+You receive the MASTER_RESUME (the only base: never reuse text, headlines, locations or visa lines from any other job), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (job skills already classified) and the candidate's SKILL_CONFIRMATIONS.
 
+Skill groups. Every job skill is in exactly one group:
+- A. Strong: shown in the master resume, or confirmed "Strong" by the candidate. Feature it prominently: headline, summary, bullets, Skills.
+- B. Transferable: the candidate has an equivalent. Use the job's exact word next to the real one, e.g. "Node.js (Express, NestJS-style modular architecture)" or "GCP (via strong AWS experience)", and highlight the shared concepts.
+- C. Basic: confirmed "Basic". Put it in Skills on a "Working knowledge: X, Y" line only; never in a bullet.
+- D. Not known: confirmed "No" or "Learning", or not confirmed at all. Never present it as experience anywhere. If confirmed "Learning", add it to a "Currently learning: X" Skills line. List every D skill under report.gaps.
 
-def tailor_system(max_match: bool = False) -> str:
-    return f"""You are an expert resume writer who tailors resumes for ATS systems and human recruiters.
+ATS rules:
+- Mirror the job's exact terms and spelling ("PostgreSQL", not only "Postgres"; "CI/CD"; "RESTful APIs"). Give the full form and the abbreviation once where useful, e.g. "Amazon Web Services (AWS)".
+- Every required skill in groups A-C appears in Skills. The top 5-8 required skills of groups A-B also appear in the headline or summary and in at least one experience bullet.
+- Repeat the most important keywords 2-3 times across the resume, in context. Never repeat a word more than 3-4 times, and never write keyword blocks.
+- Never change the job titles in the Experience section. The headline may use the job's title family when the candidate's real title is close (e.g. the job says "Backend Engineer" and the candidate is a Full Stack Engineer with heavy backend work: "Backend-Focused Full Stack Engineer").
+- Write dates as "Mon YYYY – Mon YYYY" (only the format changes, never the dates).
 
-You receive a candidate's master resume and a job description and/or ATS feedback listing missing keywords. Return a tailored version of the resume.
+availability (the line shown under the contact details), built fresh from TARGET_SETTINGS only:
+- Remote: "Open to remote work (UTC+X)" with the candidate's time zone from the settings. Never mention relocation or visas.
+- Relocation: "Open to relocation to <city, country> (<visa> sponsorship)", with the visa name from the settings or, if it is empty, that country's usual skilled-work visa (e.g. Germany: EU Blue Card; United Kingdom: Skilled Worker visa; United States: H-1B visa; Netherlands: Highly Skilled Migrant visa; Canada: work permit).
+- Local / Onsite: an empty string.
+contact holds only the email, phone, location and links from the master resume.
 
-{tailor_rules(max_match)}"""
+headline: one line under 95 characters: "<Title aligned to job> | <Top skill> | <Top skill> | <Top skill> | <Domain or strength>", using the strongest required skills in groups A or B.
 
+summary: 3-4 sentences in a confident, human tone: who the candidate is in the job's language (years of experience, title family, core stack for this job); the strongest achievement relevant to this job; two or three more matching strengths (scale, domain, ownership, tools); optionally a work style the posting asks for (remote/async, AI-assisted development, startup pace). Don't copy sentences from the posting. No buzzwords (passionate, rockstar, results-driven) and no first-person pronouns.
 
-def revision_system(max_match: bool = False) -> str:
-    keywords = ("- Missing keywords: add every one (Skills plus a fitting bullet or the summary), following the "
-                "Max ATS match rules below. Only credentials go under keywords_not_added."
-                if max_match else
-                "- Missing keywords: add each one only where the master resume supports it, in natural language "
-                "(skills, summary or the relevant bullet). List the rest under keywords_not_added with a reason.")
-    return f"""You are an expert resume writer revising a resume you tailored earlier, using a report from an ATS (applicant tracking system) checker.
+Experience:
+- Keep every employer, job title and date exactly as in the master resume, in reverse chronological order.
+- Reorder bullets so the most job-relevant come first: 3-6 bullets for recent roles, 1-3 for older or less relevant ones.
+- Rewrite bullets in the job's vocabulary when the meaning matches: Action verb + what was built or done + technology + result or impact. Expand a bullet only with detail that is true (what the system did, who used it, what problem it solved, which tech).
+- Keep real numbers exactly. Never invent numbers; with no real number, describe the impact in words ("reduced manual reporting work", "used daily by the client's operations team"). No filler counts such as "1 dataset", "2 APIs", "3 tools".
+- Never start with "Responsible for", "Worked on" or "Helped".
 
-You receive the candidate's master resume (the source of facts), the job description, the current tailored resume (JSON) and the ATS checker report. Return the complete revised resume.
+skills: 5-8 categories ordered by relevance to this job (e.g. Languages, Backend, Frontend, Databases, Cloud & DevOps, AI & Developer Tools), each written "Category: a, b, c" with the job's required skills first, in the job's spelling; then the "Working knowledge: ..." and "Currently learning: ..." lines if needed. No duplicates across categories, no uncategorised keyword dump, no soft-skills line.
+
+Projects: most relevant first; the top 2-3 may get one short line showing the matching tech or domain, if true. Education and certifications: copy them exactly; never create certificates or degrees.
+
+Length: 1-2 pages, 450-750 words for under 10 years of experience. Cut the least relevant bullets and projects first, never whole roles. Use empty strings or lists for fields the master resume does not have.
+
+Apply TARGET_SETTINGS must_include items where they are true, and never include must_exclude items.
+
+report (shown in the app, never exported):
+- keywords_covered: each job keyword now in the resume and where (headline / summary / bullet at <company> / skills).
+- location_line_used: the availability line, or "none (local job)".
+- skill_groups: every job skill with its final group (A, B, C or D) and a short note (B: the equivalent used; C/D: the candidate's answer).
+- gaps: for each group D skill, a short honest plan (e.g. "Build a small Rust CLI this weekend, then it can move to Working knowledge").
+- interview_prep: the 3-5 skills most likely to be asked about, with one talking point each, from the resume.
+- cover_letter_angle: one or two sentences on how to address the gaps honestly.
+job_keywords: every skill from the job analysis in the posting's wording, plus the job title.
+
+Self-check before answering: the availability line matches THIS job's settings with nothing carried over; the headline is one line with the job's top skills; every A-C required skill is in Skills and the top ones are also in the summary or bullets; C skills are only on the Working knowledge line; no D skill is claimed as experience; no duplicate skills, no keyword dump, no invented or filler numbers; employers, titles and dates unchanged; standard section names."""
+
+REVISION_PROMPT = f"""You are revising a resume you tailored earlier for the same job, using an ATS checker report. You receive the master resume (the only source of facts), the job description, the target settings, the job analysis, the skill confirmations, the current tailored resume (JSON) and the ATS report. Return the complete revised resume and an updated report.
 
 Revision rules:
-- Fix every content issue in the report, for example: length (trim the least relevant bullets to reach the suggested word count), paragraphs instead of bullets, first-person pronouns, buzzwords, a missing or weak summary, the job title missing from the headline or summary, too few bullets with numbers (use numbers already in the master resume).
-{keywords}
-- An external checker's report may list hard skills, soft skills or other words it found missing, or words it wants mentioned more often. Treat every one of them as a job keyword, use its exact wording, and repeat it where the report asks for more mentions.
-- Ignore checks about section headings, columns, tables, fonts or file format: the app's templates already use standard headings (Summary, Skills, Experience, Projects, Education, Certifications) and a parseable layout. Do not change content to compensate for them.
-- If the report names a job title that is clearly a parsing mistake (e.g. "About the Role"), use the real title from the target job title or the job description instead.
-- keywords_added lists the keywords integrated in this revision and where; keywords_not_added lists the report's keywords you did not add.
-- Keep everything else from the current resume that the report does not flag.
-- job_keywords: return the current job's keyword list (or extract it from the job description), plus every keyword an external checker's report says is missing.
-- candidate_confirmed_keywords (if given) are skills the candidate personally confirms are true, with a note on where or how they used them. Treat them as facts from the master resume and add every one of them: if the note says "Skills only", add it only to Skills; if the note gives a suggested bullet for a role or project, add that bullet (lightly edited to fit) to that entry; if the note names a role or project, also word it naturally into one of that entry's bullets (or a new bullet there), and add it to Skills. Use the keyword's exact wording from the ATS report. Do not invent metrics, tools or details beyond the note, and do not list them under keywords_not_added.
-- This may be one of several rounds. If a score_history is given and the score dropped after the last round, undo that kind of change instead of pushing further in the same direction.
+- Fix every content issue in the report: length, bullets, pronouns, buzzwords, the summary, the job title missing from the headline or summary, weak bullet starts.
+- Missing keywords: add those in groups A-C as the tailoring rules say. Never add a group D keyword (unconfirmed, "No" or "Learning") as experience, even when a checker report lists it; keep it under report.gaps instead.
+- An external checker's report may list missing hard skills: treat them as job skills under the same group rules, and add them to job_keywords.
+- Ignore checks about headings, columns, tables, fonts or file format: the app's templates handle those. If a report names a job title that is a parsing mistake (e.g. "About the Role"), use the real title.
+- Too few bullets with numbers: use only numbers that are in the master resume; never invent them.
+- Keep everything the report does not flag. If score_history shows the score dropped after the last round, undo that kind of change.
 
-These tailoring rules still apply:
-{tailor_rules(max_match)}"""
+The tailoring rules still apply:
 
+{TAILOR_PROMPT}"""
 
-TAILOR_RULES = tailor_rules()
-SYSTEM_PROMPT = tailor_system()
-REVISION_PROMPT = revision_system()
+JOB_TYPES = ("Remote", "Relocation", "Local / Onsite")
+CONFIRM_LEVELS = ("Strong", "Basic", "Learning", "No")
 
 COVER_LETTER_SCHEMA = _obj({
     "greeting": _STR,     # e.g. "Dear Hiring Manager,"
@@ -199,22 +228,24 @@ Rules:
   4. A short close: enthusiasm for the company's work (only what the job description says about it) and a request for an interview.
 - Confident and specific, plain words. No first line like "I am writing to apply", no buzzwords (team player, hard worker, results-driven, passionate go-getter), no flattery or clichés.
 - greeting: "Dear Hiring Manager," unless the job description names the hiring person. Never use placeholders like [Company] or [Name]: if the company name is not given, write around it.
+- If a cover_letter_angle is given, use it to address skill gaps briefly and honestly (e.g. a related strength and a fast learning plan); never claim a skill the resume doesn't show.
 - closing: e.g. "Kind regards,". The app adds the candidate's name below it."""
 
 
-def cover_letter_request(resume: dict, job_text: str, job_title: str = "") -> tuple[str, str]:
+def cover_letter_request(resume: dict, job_text: str, job_title: str = "", angle: str = "") -> tuple[str, str]:
     """(system prompt, user content) for a cover letter — for engines.run(..., schema=COVER_LETTER_SCHEMA)."""
     content = (
         f"<resume>\n{json.dumps(resume, ensure_ascii=False, separators=(',', ':'))}\n</resume>\n\n"
         f"<job_description>\n{job_text}\n</job_description>\n\n"
         f"{_title_block(job_title)}"
-        "Write the cover letter following the rules."
+        + (f"<cover_letter_angle>{angle}</cover_letter_angle>\n\n" if angle else "")
+        + "Write the cover letter following the rules."
     )
     return COVER_LETTER_PROMPT, content
 
 
-def build_cover_letter_prompt(resume: dict, job_text: str, job_title: str = "") -> str:
-    return _manual_prompt(*cover_letter_request(resume, job_text, job_title), COVER_LETTER_SCHEMA)
+def build_cover_letter_prompt(resume: dict, job_text: str, job_title: str = "", angle: str = "") -> str:
+    return manual_prompt(*cover_letter_request(resume, job_text, job_title, angle), COVER_LETTER_SCHEMA)
 
 
 def parse_cover_letter(text: str) -> dict:
@@ -239,32 +270,79 @@ def _title_block(job_title: str) -> str:
     return f"<target_job_title>{job_title}</target_job_title>\n\n" if job_title.strip() else ""
 
 
-def _user_content(master_resume: str, job_feedback: str, job_title: str = "") -> str:
+def _settings_text(settings: dict | None) -> str:
+    """TARGET_SETTINGS as plain lines. settings: job_type, timezone, location, visa, must_include, must_exclude."""
+    s = settings or {}
+    job_type = s.get("job_type") or "not specified"
+    lines = [f"job_type: {job_type}"]
+    if job_type == "Remote":
+        lines.append(f"candidate_time_zone: {s.get('timezone') or 'unknown (write: Open to remote work)'}")
+    elif job_type == "Relocation":
+        lines.append(f"relocation_to: {s.get('location') or 'the job location in the posting'}")
+        lines.append(f"visa: {s.get('visa') or '(use that country usual skilled-work visa)'}")
+    for key in ("must_include", "must_exclude"):
+        if s.get(key):
+            lines.append(f"{key}: {s[key]}")
+    return "\n".join(lines)
+
+
+def _confirmations_text(confirmations: dict | None) -> str:
+    """confirmations: {key: {"skill", "level"}} with level one of CONFIRM_LEVELS."""
+    if not confirmations:
+        return "(none given: treat every unconfirmed skill as group D)"
+    return "\n".join(f"- {c['skill']}: {c['level']}" for c in confirmations.values())
+
+
+def _job_block(job_text: str, job_title: str, settings: dict | None, analysis: dict | None,
+               confirmations: dict | None) -> str:
+    analysis_json = json.dumps(analysis, ensure_ascii=False, separators=(",", ":")) if analysis else "(not given)"
     return (
-        f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
-        f"<job_description_and_feedback>\n{job_feedback}\n</job_description_and_feedback>\n\n"
+        f"<job_description>\n{job_text or '(not provided)'}\n</job_description>\n\n"
         f"{_title_block(job_title)}"
-        "Tailor the resume for this job following the rules."
+        f"<target_settings>\n{_settings_text(settings)}\n</target_settings>\n\n"
+        f"<job_analysis>\n{analysis_json}\n</job_analysis>\n\n"
+        f"<skill_confirmations>\n{_confirmations_text(confirmations)}\n</skill_confirmations>\n\n"
     )
 
 
-def _revision_content(master_resume: str, job_feedback: str, job_title: str, resume: dict, ats_report: str,
-                      progress: str = "", confirmed: list[dict] | None = None) -> str:
+def analysis_request(master_resume: str, job_text: str, job_title: str = "") -> tuple[str, str]:
+    """(system prompt, user content) for step 1, analysing the job — use with ANALYSIS_SCHEMA."""
+    content = (
+        f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
+        f"<job_description>\n{job_text}\n</job_description>\n\n"
+        f"{_title_block(job_title)}"
+        "Analyse this job against the master resume following the instructions."
+    )
+    return ANALYSIS_PROMPT, content
+
+
+def tailor_request(master_resume: str, job_text: str, job_title: str = "", settings: dict | None = None,
+                   analysis: dict | None = None, confirmations: dict | None = None) -> tuple[str, str]:
+    """(system prompt, user content) for step 2, the tailored resume — always built from the master."""
+    content = (
+        f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
+        f"{_job_block(job_text, job_title, settings, analysis, confirmations)}"
+        "Tailor the resume for this job following the rules, then self-check it."
+    )
+    return TAILOR_PROMPT, content
+
+
+def revision_request(master_resume: str, job_text: str, resume: dict, ats_report: str, job_title: str = "",
+                     settings: dict | None = None, analysis: dict | None = None,
+                     confirmations: dict | None = None, progress: str = "") -> tuple[str, str]:
+    """(system prompt, user content) for one ATS revision round. progress: e.g. "v1: 62, v2: 78"."""
     master = master_resume or "(not provided: treat the current resume as the source of facts)"
     current = json.dumps(resume, ensure_ascii=False, separators=(",", ":"))
     history = f"<score_history>{progress}</score_history>\n\n" if progress else ""
-    if confirmed:
-        lines = "\n".join(f"- {c['keyword']}" + (f": {c['note']}" if c.get("note") else "") for c in confirmed)
-        history += f"<candidate_confirmed_keywords>\n{lines}\n</candidate_confirmed_keywords>\n\n"
-    return (
+    content = (
         f"<master_resume>\n{master}\n</master_resume>\n\n"
-        f"<job_description>\n{job_feedback or '(not provided)'}\n</job_description>\n\n"
-        f"{_title_block(job_title)}"
+        f"{_job_block(job_text, job_title, settings, analysis, confirmations)}"
         f"<current_resume>\n{current}\n</current_resume>\n\n"
         f"<ats_report>\n{ats_report}\n</ats_report>\n\n"
         f"{history}"
         "Revise the resume to fix the issues in the ATS report, following the rules."
     )
+    return REVISION_PROMPT, content
 
 
 def normalize(value, schema: dict):
@@ -277,6 +355,11 @@ def normalize(value, schema: dict):
         if isinstance(value, str):
             value = [value] if value.strip() else []
         return [normalize(v, schema["items"]) for v in value] if isinstance(value, list) else []
+    if kind == "integer":
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
     if value is None:
         return ""
     if isinstance(value, list):
@@ -287,39 +370,6 @@ def normalize(value, schema: dict):
 # --------------------------------------------------------------------------- #
 # Mode 1: Anthropic API (automatic, needs API credits)
 # --------------------------------------------------------------------------- #
-
-def tailor_resume(
-    master_resume: str,
-    job_feedback: str,
-    api_key: str | None = None,
-    model: str = MODEL,
-    effort: str = EFFORT,
-    job_title: str = "",
-) -> tuple[dict, str]:
-    """Returns (result, usage summary). api_key=None reads ANTHROPIC_API_KEY."""
-    return _call_claude(SYSTEM_PROMPT, _user_content(master_resume, job_feedback, job_title), api_key, model, effort)
-
-
-def revise_resume(
-    master_resume: str,
-    job_feedback: str,
-    resume: dict,
-    ats_report: str,
-    api_key: str | None = None,
-    model: str = MODEL,
-    effort: str = EFFORT,
-    job_title: str = "",
-    progress: str = "",
-    confirmed: list[dict] | None = None,
-) -> tuple[dict, str]:
-    """Revise an already-tailored resume using an ATS checker report.
-
-    progress: score history, e.g. "v1: 62%, v2: 78%". confirmed: [{"keyword", "note"}] the
-    candidate confirms are true although the master resume doesn't mention them.
-    """
-    content = _revision_content(master_resume, job_feedback, job_title, resume, ats_report, progress, confirmed)
-    return _call_claude(REVISION_PROMPT, content, api_key, model, effort)
-
 
 def _call_claude(system: str, content: str, api_key: str | None, model: str, effort: str,
                  schema: dict = RESPONSE_SCHEMA) -> tuple[dict, str]:
@@ -363,34 +413,7 @@ def _skeleton(schema: dict):
     return ""
 
 
-def tailor_request(master_resume: str, job_feedback: str, job_title: str = "",
-                   max_match: bool = False) -> tuple[str, str]:
-    """(system prompt, user content) for tailoring — for engines.run()."""
-    return tailor_system(max_match), _user_content(master_resume, job_feedback, job_title)
-
-
-def revision_request(master_resume: str, job_feedback: str, resume: dict, ats_report: str, job_title: str = "",
-                     progress: str = "", confirmed: list[dict] | None = None,
-                     max_match: bool = False) -> tuple[str, str]:
-    """(system prompt, user content) for one ATS revision round — for engines.run()."""
-    return revision_system(max_match), _revision_content(master_resume, job_feedback, job_title, resume,
-                                                         ats_report, progress, confirmed)
-
-
-def build_manual_prompt(master_resume: str, job_feedback: str, job_title: str = "", max_match: bool = False) -> str:
-    """One prompt to paste into claude.ai; its reply is read back by parse_claude_reply()."""
-    return _manual_prompt(*tailor_request(master_resume, job_feedback, job_title, max_match))
-
-
-def build_revision_prompt(master_resume: str, job_feedback: str, resume: dict, ats_report: str,
-                          job_title: str = "", progress: str = "", confirmed: list[dict] | None = None,
-                          max_match: bool = False) -> str:
-    """Copy-paste version of revise_resume()."""
-    return _manual_prompt(*revision_request(master_resume, job_feedback, resume, ats_report, job_title,
-                                            progress, confirmed, max_match))
-
-
-def _manual_prompt(system: str, content: str, schema: dict = RESPONSE_SCHEMA) -> str:
+def manual_prompt(system: str, content: str, schema: dict = RESPONSE_SCHEMA) -> str:
     shape = json.dumps(_skeleton(schema), separators=(",", ":"))
     return (
         f"{system}\n\n"
@@ -468,7 +491,25 @@ def _load_json(text: str):
 
 
 def parse_claude_reply(text: str) -> dict:
-    """Read the JSON from a pasted Claude reply (tolerates code fences, extra text and smart quotes)."""
+    """Read a tailored resume from a pasted Claude reply (tolerates code fences, extra text and smart quotes)."""
+    data = _reply_json(text)
+    if "resume" not in data and "name" in data:  # a bare resume, e.g. a saved .json
+        data = {"resume": data}
+    result = normalize(data, RESPONSE_SCHEMA)
+    if not result["resume"]["name"] and not result["resume"]["experience"]:
+        raise TailorError("The pasted JSON doesn't contain a resume. Paste Claude's whole reply.")
+    return result
+
+
+def parse_analysis(text: str) -> dict:
+    """Read a pasted job analysis (step 1 in copy-paste mode)."""
+    result = normalize(_reply_json(text), ANALYSIS_SCHEMA)
+    if not result["skills"] and not result["job_title"]:
+        raise TailorError("The pasted JSON doesn't contain a job analysis. Paste Claude's whole reply.")
+    return result
+
+
+def _reply_json(text: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if start == -1:
         raise TailorError("No JSON found. Paste Claude's whole reply, starting with { and ending with }.")
@@ -483,12 +524,9 @@ def parse_claude_reply(text: str) -> dict:
             "Copy the reply with the copy button under Claude's message and paste it here directly. "
             "If the reply was cut off, ask Claude to \"continue\" and paste the full JSON."
         ) from None
-    if "resume" not in data and "name" in data:  # a bare resume, e.g. a saved .json
-        data = {"resume": data}
-    result = normalize(data, RESPONSE_SCHEMA)
-    if not result["resume"]["name"] and not result["resume"]["experience"]:
-        raise TailorError("The pasted JSON doesn't contain a resume. Paste Claude's whole reply.")
-    return result
+    if not isinstance(data, dict):
+        raise TailorError("The pasted reply is not a JSON object. Paste Claude's whole reply.")
+    return data
 
 
 # --------------------------------------------------------------------------- #
@@ -558,8 +596,11 @@ def main() -> None:
     parser.add_argument("--template", default="classic", choices=list(render.TEMPLATES), help="Resume template")
     parser.add_argument("--page", default="A4", choices=list(render.PAGE_SIZES), help="Page size")
     parser.add_argument("--title", default="", help="Exact job title from the posting")
-    parser.add_argument("--max-match", action="store_true",
-                        help="Add every job keyword, even ones the resume doesn't show yet (aims for 100%% match)")
+    parser.add_argument("--job-type", default="Local / Onsite", choices=list(JOB_TYPES),
+                        help="Sets the line under your contact details")
+    parser.add_argument("--timezone", default="", help="Remote jobs: your time zone, e.g. UTC+5")
+    parser.add_argument("--relocate-to", default="", help="Relocation jobs: city and country, e.g. Berlin, Germany")
+    parser.add_argument("--visa", default="", help="Relocation jobs: visa name (default: that country's usual one)")
     parser.add_argument("--engine", default="auto", choices=["auto", "claude-code", "api"],
                         help="claude-code = your Claude subscription via Claude Code; api = ANTHROPIC_API_KEY "
                              "(auto: Claude Code if installed, else the API)")
@@ -587,16 +628,16 @@ def main() -> None:
     print(f"Tailoring {resume_path.name} against {job_path.name} ...")
     config = {"engine": "code" if engine == "claude-code" else "api", "model_cli": "sonnet", "model_api": MODEL,
               "effort": EFFORT, "api_key": os.environ.get("ANTHROPIC_API_KEY")}
+    settings = {"job_type": args.job_type, "timezone": args.timezone, "location": args.relocate_to,
+                "visa": args.visa}
     try:
-        result, usage = engines.run(config, *tailor_request(master, job, args.title, args.max_match))
+        # No skill confirmations on the command line: skills the resume doesn't show stay group D
+        result, usage = engines.run(config, *tailor_request(master, job, args.title, settings))
         print(usage)
     except engines.EngineError as e:
         sys.exit(str(e))
 
     resume = result["resume"]
-    if args.max_match:
-        import ats
-        resume, _ = ats.ensure_keywords(resume, result["job_keywords"])
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = out_dir / output_stem(resume, args.label or args.title)
@@ -605,13 +646,14 @@ def main() -> None:
     render.build_docx(resume, stem.with_suffix(".docx"), args.template, page=args.page)
     stem.with_suffix(".json").write_text(json.dumps(resume, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print("\nKeywords added:")
-    for k in result["keywords_added"] or [{"keyword": "(none)", "where": ""}]:
+    report = result["report"]
+    print("\nKeywords covered:")
+    for k in report["keywords_covered"] or [{"keyword": "(none)", "where": ""}]:
         print(f"  + {k['keyword']}  ->  {k['where']}")
-    if result["keywords_not_added"]:
-        print("\nNot added (no supporting experience — add manually only if true):")
-        for k in result["keywords_not_added"]:
-            print(f"  - {k['keyword']}: {k['reason']}")
+    if report["gaps"]:
+        print("\nGaps (not claimed; the web app can ask you about each one):")
+        for g in report["gaps"]:
+            print(f"  - {g['skill']}: {g['plan']}")
 
     print(f"\nSaved: {stem}.pdf / .docx / .json")
 

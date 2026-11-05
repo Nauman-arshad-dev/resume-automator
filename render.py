@@ -293,6 +293,10 @@ def build_docx(resume: dict, path, template: str = "classic", accent: str | None
         contact = doc.add_paragraph()
         contact.alignment = align
         contact.add_run("  |  ".join(resume["contact"])).font.color.rgb = muted
+    if resume.get("availability"):
+        line = doc.add_paragraph()
+        line.alignment = align
+        line.add_run(resume["availability"]).italic = True
 
     if resume["summary"]:
         heading("Summary")
@@ -364,7 +368,9 @@ def build_cover_docx(resume: dict, letter: dict, path, template: str, accent: st
     if resume["contact"]:
         contact = doc.add_paragraph()
         contact.add_run("  |  ".join(resume["contact"])).font.color.rgb = RGBColor(*MUTED_COLOR)
-        _bottom_border(contact, accent)
+    if resume.get("availability"):
+        doc.add_paragraph().add_run(resume["availability"]).italic = True
+    _bottom_border(doc.paragraphs[-1], accent)
     doc.add_paragraph(_today())
     for text in [letter["greeting"], *letter["paragraphs"]]:
         if text:
