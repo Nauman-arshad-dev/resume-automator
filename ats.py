@@ -189,8 +189,14 @@ def trim_to_length(resume: dict, keywords: list[str], max_words: int = WORDS_MAX
     return resume, removed
 
 
+def words_for_pages(pages: int) -> tuple[int, int]:
+    """Word range checkers expect for a 1- or 2-page resume."""
+    return (250, 600) if pages <= 1 else (WORDS_MIN, WORDS_MAX)
+
+
 def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None, job_title: str = "",
-          job_text: str = "", one_column: bool = True) -> Report:
+          job_text: str = "", one_column: bool = True, page_limit: int = 2) -> Report:
+    words_min, words_max = words_for_pages(page_limit)
     text = pdf_text(pdf_bytes)
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     lower_lines = {ln.lower() for ln in lines}
@@ -230,9 +236,9 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
         "Some roles have no dates.", "Add start and end dates (e.g. Jan 2023 - Present) to every role.", 3)
 
     # Content — writing quality
-    add("Content", f"Length {WORDS_MIN}-{WORDS_MAX} words", WORDS_MIN <= words <= WORDS_MAX,
+    add("Content", f"Length {words_min}-{words_max} words", words_min <= words <= words_max,
         f"{words} words.",
-        "Trim older or less relevant bullets and keep the strongest." if words > WORDS_MAX
+        "Trim older or less relevant bullets and keep the strongest." if words > words_max
         else "Add more detail to recent roles: what you built, with which tools, and the result.", 8)
     pronouns = PRONOUNS.findall(text)
     add("Content", "No first-person pronouns", not pronouns, f"Found {len(pronouns)} (I / me / my).",

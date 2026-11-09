@@ -19,6 +19,7 @@ import re
 from datetime import date
 
 import ats
+import evidence
 import main
 import render
 
@@ -121,8 +122,14 @@ def skill_items(resume: dict) -> list[tuple[str, str]]:
 # Automatic fixes
 # --------------------------------------------------------------------------- #
 
-def fix_resume(resume: dict, job_skills: list[str], confirmations: dict) -> tuple[dict, list[str]]:
-    """Mechanical clean-up; returns (fixed copy, notes on what changed)."""
+def fix_resume(resume: dict, job_skills: list[str], confirmations: dict, master: str = "",
+               mode: str = "Strict") -> tuple[dict, list[str]]:
+    """Mechanical clean-up; returns (fixed copy, notes on what changed).
+
+    With the master resume given, Strict mode also removes Skills items the profile doesn't
+    show and the candidate didn't confirm, and only adds missing job skills that are backed.
+    Flexible mode adds every missing job skill except "No" answers.
+    """
     notes: list[str] = []
     r = {**resume, "skills": list(resume["skills"]),
          "experience": [{**j, "bullets": list(j["bullets"])} for j in resume["experience"]],
@@ -171,12 +178,17 @@ def fix_resume(resume: dict, job_skills: list[str], confirmations: dict) -> tupl
         groups.append(extra)
     extra["items"] += bucket_items
 
-    seen, dupes = set(), []
+    master_norm = evidence.normalise(master) if master else ""
+    strict = bool(master) and mode != "Flexible"
+    seen, dupes, unbacked = set(), [], []
     for g in groups:
         kept = []
         for item in g["items"]:
             key = item.strip().lower()
             if not key or key in excluded:
+                continue
+            if strict and not evidence.allowed(item, master, confirmations, mode, master_norm):
+                unbacked.append(item)
                 continue
             if key in seen:
                 dupes.append(item)
@@ -186,13 +198,21 @@ def fix_resume(resume: dict, job_skills: list[str], confirmations: dict) -> tupl
         g["items"] = kept
     if dupes:
         notes.append("Skills: removed duplicates: " + ", ".join(dict.fromkeys(dupes)) + ".")
+    if unbacked:
+        notes.append("Skills: removed items your profile doesn't show and you haven't confirmed: "
+                     + ", ".join(dict.fromkeys(unbacked)) + ". Confirm them as Strong or Basic to include them.")
 
     skills_text = " ".join(i for g in groups for i in g["items"]).lower()
     missing = [s for s in dict.fromkeys(job_skills) if s.strip().lower() not in excluded
-               and not ats.has_keyword(skills_text, s)]
+               and not ats.has_keyword(skills_text, s)
+               and not evidence.mentions(skills_text, s)
+               and (not strict or evidence.allowed(s, master, confirmations, mode, master_norm))]
+    if not master and mode != "Flexible":
+        missing = []  # nothing to check the evidence against: never add skills blindly
     if missing:
         extra["items"] += missing
-        notes.append("Skills: added job skills that were missing: " + ", ".join(missing) + ".")
+        notes.append("Skills: added job skills " + ("you have" if strict else "that were missing") + ": "
+                     + ", ".join(missing) + ".")
 
     job_lower = [s.lower() for s in job_skills]
     total = sum(len(g["items"]) for g in groups)

@@ -50,187 +50,16 @@ MODEL = os.environ.get("RESUME_MODEL", "claude-sonnet-5-5")
 # Lower effort = fewer thinking tokens. "low" is cheapest; "high" is most careful.
 EFFORT = os.environ.get("RESUME_EFFORT", "medium")
 MAX_TOKENS = 16000
+API_TIMEOUT_SECONDS = 600
 
-# --------------------------------------------------------------------------- #
-# Resume schema — Claude's reply is constrained to exactly this JSON shape.
-# --------------------------------------------------------------------------- #
-
-def _obj(properties: dict) -> dict:
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": list(properties),
-        "additionalProperties": False,
-    }
-
-
-_STR = {"type": "string"}
-_STR_LIST = {"type": "array", "items": _STR}
-
-RESUME_SCHEMA = _obj({
-    "name": _STR,
-    "headline": _STR,  # short professional title, e.g. "Backend Engineer | Node.js, AWS"
-    "contact": _STR_LIST,  # e.g. ["email", "phone", "city", "linkedin url"]
-    "availability": _STR,  # e.g. "Open to remote work (UTC+5)", "" for local jobs
-    "summary": _STR,
-    "skills": _STR_LIST,
-    "experience": {"type": "array", "items": _obj({
-        "title": _STR,
-        "company": _STR,
-        "location": _STR,
-        "dates": _STR,
-        "bullets": _STR_LIST,
-    })},
-    "projects": {"type": "array", "items": _obj({
-        "name": _STR,
-        "bullets": _STR_LIST,
-    })},
-    "education": {"type": "array", "items": _obj({
-        "degree": _STR,
-        "school": _STR,
-        "dates": _STR,
-        "details": _STR_LIST,
-    })},
-    "certifications": _STR_LIST,
-    "languages": _STR_LIST,  # spoken languages, e.g. ["English (C1)", "German (B1)"]
-})
-
-_INT = {"type": "integer"}
-
-# Step 1: analyse the job against the master resume, before anything is written.
-ANALYSIS_SCHEMA = _obj({
-    "job_title": _STR,
-    "title_variants": _STR_LIST,
-    "company": _STR,
-    "job_location": _STR,  # city / country of the role as the posting states it, "" if not stated
-    "skills": {"type": "array", "items": _obj({
-        "skill": _STR,       # the posting's exact wording
-        "importance": _STR,  # "required" | "nice to have"
-        "mentions": _INT,
-        "group": _STR,       # "A" in the master resume | "B" transferable | "unconfirmed"
-        "evidence": _STR,    # A: where in the resume; B: the candidate's equivalent skill
-        "meaning": _STR,     # what the term means at this company, when not obvious
-    })},
-    "responsibilities": _STR_LIST,
-    "domain_keywords": _STR_LIST,
-    "seniority": _STR,
-})
-
-ANALYSIS_PROMPT = """You are an expert recruiter and ATS analyst. Analyse ONE job description against the candidate's master resume, before any resume is written.
-
-Return:
-- job_title: the exact job title from the posting (never a section heading such as "About the Role"); title_variants: 1-4 close variants.
-- company and job_location: as the posting states them; empty strings if not stated. Never guess.
-- skills: every hard skill in the posting (languages, frameworks, databases, cloud, tools, platforms, methods, certifications), in the posting's exact wording and spelling, most important first. importance: "required" or "nice to have". mentions: how many times the posting mentions it. meaning: one short phrase on what the term means at this company when that is not obvious (e.g. "static analysis" at a mobile-app data company means analysing app binaries at scale, not linting pull requests), otherwise "".
-  group, judged strictly against the master resume:
-  - "A": clearly shown in the master resume. evidence = the role or project that shows it.
-  - "B": not named, but the candidate has a clear equivalent (the job says NestJS and the resume has Node.js/Express; the job says GCP and the resume has AWS). evidence = the equivalent from the resume.
-  - "unconfirmed": not in the master resume and no clear equivalent. The candidate will be asked about it. evidence = "".
-- responsibilities: the 5-8 main things the person will do.
-- domain_keywords: industry, product type and scale terms (e.g. fintech, payments, data pipelines, high-throughput).
-- seniority: years of experience, leadership, ownership or mentoring signals, in one line."""
-
-RESPONSE_SCHEMA = _obj({
-    "resume": RESUME_SCHEMA,
-    "job_keywords": _STR_LIST,  # every job skill + the title, used by the built-in ATS check
-    "report": _obj({  # Part B: shown in the app, never exported
-        "keywords_covered": {"type": "array", "items": _obj({"keyword": _STR, "where": _STR})},
-        "location_line_used": _STR,
-        "skill_groups": {"type": "array", "items": _obj({"skill": _STR, "group": _STR, "note": _STR})},
-        "gaps": {"type": "array", "items": _obj({"skill": _STR, "plan": _STR})},
-        "interview_prep": {"type": "array", "items": _obj({"skill": _STR, "talking_point": _STR})},
-        "cover_letter_angle": _STR,
-    }),
-})
-
-TAILOR_PROMPT = """You are an expert resume writer and ATS optimization engine working in FLEXIBLE KEYWORD INJECTION mode. Goal: maximise job-description keyword coverage (target 90%+) for ATS and LLM screening, while removing every "fabrication tell" that makes a human or LLM reviewer reject the resume.
-
-You receive the MASTER_RESUME (the only base: never reuse text, headlines, locations or visa lines from any other job), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (job skills already classified) and the candidate's SKILL_CONFIRMATIONS.
-
-KEYWORD INJECTION (be aggressive):
-1. Add every hard requirement and bonus skill from the job to Skills as a BARE TOKEN: "Vue.js", "PostGIS", "C++". Never parentheticals, hedges or explanations such as "(via X experience)", "(basics)", "(transferable)", "/PostGIS (PostGIS via PostgreSQL)". Only exception: skills the candidate answered "No" in SKILL_CONFIRMATIONS are left out completely.
-2. For each injected skill, find the closest adjacent anchor in the master resume's experience bullets and rewrite that bullet to mention the adjacent concept truthfully (e.g. Google Maps API work -> "geospatial data" for PostGIS; legacy C code -> "C/C++"; NSwag -> "generated TypeScript client SDK").
-3. If a bonus skill has implicit evidence (legacy C -> C/C++), surface it in the bullet and list it in the main Skills categories.
-4. Never invent a project, employer, title, date, degree, certification or quantified outcome. Rewording existing bullets to surface plausible adjacencies IS allowed. Keep real numbers exactly; never add new ones.
-5. Never inflate years of experience. Compute the span from the earliest dated role to today and state floor(span) + "+ years" (span 3.5 -> "3+ years", never "5"). Never claim years for a single tool, and never put a skill in the summary as years of experience unless the master resume shows it for that long.
-6. Mirror the job's exact spelling ("PostgreSQL", "CI/CD", "RESTful APIs"). Map every job requirement to a bullet in the job's own words where truthfully plausible.
-
-STRUCTURE (non-negotiable):
-7. Each employer appears exactly once. If the candidate held several roles at one employer, write one entry: titles joined as "Senior Engineer → Lead Engineer" with the full date range.
-8. location field of a role: "City, Country | Type" when the master resume gives a type (Remote, Hybrid, Freelance, Contract), else just the location. Every date range belongs to a role, project or education entry; no bare date lines.
-9. Normalise: "Full-Stack" (hyphenated), dates "Mon YYYY – Mon YYYY" with a spaced en dash everywhere.
-10. Preserve every section of the master resume: Education, Certifications and Languages (spoken languages, in the languages field) are never dropped.
-11. Fit 2 pages at most: 450-700 words. Cut the least relevant bullets and projects first, never whole roles or sections.
-
-SKILLS HYGIENE:
-12. 4-6 categories written "Category: a, b, c", ordered by relevance, job skills first. No "Working knowledge", "Familiar with", "Currently learning" or other catch-all buckets: list plainly in a real category, or omit.
-13. Deduplicate: no skill twice, not even under two names or inside a combined token ("PostgreSQL/PostGIS" plus "PostgreSQL"). About 15-20 items in total; drop non-job skills first. No soft-skills line.
-
-HEADER:
-- headline: one line under 95 characters: "<Title aligned to job> | <skills> | <skills> | <skills>". Use the job's title family, never the job ad's gender marker such as "(m/f/d)", "(F/M/D)", "(w/m/d)" or "(all genders)": that belongs to the ad, not to the candidate. If the candidate's latest title is more senior than the target, keep the real titles in Experience and lead bullets with hands-on verbs (built, implemented, shipped).
-- availability (the line under the contact details), from TARGET_SETTINGS only: Remote -> "Open to remote work (UTC+X)", never relocation or visas. Relocation -> "Open to relocation to <city, country> (<visa> sponsorship)" with the visa from the settings or that country's usual skilled-work visa (Germany: EU Blue Card; United Kingdom: Skilled Worker visa; United States: H-1B visa; Netherlands: Highly Skilled Migrant visa; Canada: work permit). Local / Onsite -> "" (the city is already in contact).
-- contact holds only the email, phone, location and links from the master resume.
-
-summary: 3-4 sentences, confident and human: "<Title family> with <N>+ years ..." (N from rule 5), core stack for this job named plainly (no brackets), the strongest relevant achievement, two or three matching strengths. No buzzwords, no first-person pronouns, no copied sentences from the job.
-
-Experience bullets: most job-relevant first, 3-6 for recent roles, 1-3 for older ones; Action verb + what was built + technology + result. For each framework the job names, surface a concrete bullet (version + feature + outcome) if the master resume has one; otherwise lead with the framework the candidate has real bullets for. No "Responsible for", "Worked on", "Helped".
-
-Projects: most relevant first. Education, certifications, languages: copy exactly, most relevant certification first.
-
-Apply TARGET_SETTINGS must_include items and never include must_exclude items.
-
-report (shown in the app, never exported):
-- keywords_covered: each job keyword and where it appears (headline / summary / bullet at <company> / skills).
-- location_line_used: the availability line, or "none (local job)".
-- skill_groups: every job skill with its group: A (in the resume), B (adjacent anchor surfaced: name it in note), C (injected in Skills with no anchor: interview risk), D (left out because the candidate said No).
-- gaps: for each C and D skill, a short honest plan to back it up before interviews (e.g. "Build a small PostGIS query demo this weekend").
-- interview_prep: the 3-5 skills most likely to be asked about, one talking point each, from the resume.
-- cover_letter_angle: one or two sentences on how to frame the adjacent skills honestly.
-job_keywords: every skill from the job analysis in the posting's wording, plus the job title without any gender marker.
-
-SELF-VERIFY before answering:
-- no duplicate company names; no bare date lines; all master sections present (Education, Certifications, Languages)
-- no parenthetical skill hedges anywhere, no "Working knowledge" bucket, skills deduplicated, about 15-20 items
-- no inflated years; no gender marker in the headline
-- every job hard requirement appears in Skills or a bullet (except "No" answers)
-- spacing and punctuation normalised; fits 2 pages"""
-
-REVISION_PROMPT = f"""You are revising a resume you tailored earlier for the same job, using an ATS checker report. You receive the master resume (the only source of facts), the job description, the target settings, the job analysis, the skill confirmations, the current tailored resume (JSON) and the ATS report. Return the complete revised resume and an updated report.
-
-Revision rules:
-- Fix every content issue in the report: length, bullets, pronouns, buzzwords, the summary, the job title missing from the headline or summary, weak bullet starts.
-- Missing keywords: inject them as the tailoring rules say (bare token in Skills plus an adjacent anchor in a bullet where one exists). Only skills the candidate answered "No" stay out.
-- An external checker's report may list missing hard skills: inject them the same way, and add them to job_keywords.
-- A reviewer's notes (e.g. "remove the brackets", "PostgreSQL appears twice", "take (F/M/D) out of the headline", "page 3 only has Education") are fixes to apply exactly.
-- Ignore checks about headings, columns, tables, fonts or file format: the app's templates handle those. If a report names a job title that is a parsing mistake (e.g. "About the Role"), use the real title.
-- Too few bullets with numbers: use only numbers that are in the master resume; never invent them.
-- Keep everything the report does not flag. If score_history shows the score dropped after the last round, undo that kind of change.
-
-The tailoring rules still apply:
-
-{TAILOR_PROMPT}"""
+from prompts import (  # noqa: E402,F401 — prompts and schemas live in prompts.py; re-exported here
+    ANALYSIS_PROMPT, ANALYSIS_SCHEMA, CONTENT_MODES, COVER_LETTER_PROMPT, COVER_LETTER_SCHEMA,
+    RECRUITER_PROMPT, RECRUITER_SCHEMA, REQUIREMENT_CATEGORIES, RESPONSE_SCHEMA, RESUME_SCHEMA,
+    REVISION_PROMPT, SENIORITY_LEVELS, TAILOR_PROMPT, revision_prompt, tailor_prompt,
+)
 
 JOB_TYPES = ("Remote", "Relocation", "Local / Onsite")
 CONFIRM_LEVELS = ("Strong", "Basic", "Learning", "No")
-
-COVER_LETTER_SCHEMA = _obj({
-    "greeting": _STR,     # e.g. "Dear Hiring Manager,"
-    "paragraphs": _STR_LIST,
-    "closing": _STR,      # e.g. "Kind regards,"
-})
-
-COVER_LETTER_PROMPT = """You are an expert career writer. Write a cover letter for the job, based on the candidate's tailored resume.
-
-Rules:
-- Use only facts from the resume: employers, titles, projects, skills and numbers exactly as written there. Never invent achievements or metrics.
-- 3-4 short paragraphs, 220-330 words in total:
-  1. The exact job title and company (from the job description), and one sentence on why this role fits the candidate.
-  2-3. Two or three concrete achievements from the resume that match the job's main requirements, using the job's own keywords and spelling.
-  4. A short close: enthusiasm for the company's work (only what the job description says about it) and a request for an interview.
-- Confident and specific, plain words. No first line like "I am writing to apply", no buzzwords (team player, hard worker, results-driven, passionate go-getter), no flattery or clichés.
-- greeting: "Dear Hiring Manager," unless the job description names the hiring person. Never use placeholders like [Company] or [Name]: if the company name is not given, write around it.
-- If a cover_letter_angle is given, use it to address skill gaps briefly and honestly (e.g. a related strength and a fast learning plan); never claim a skill the resume doesn't show.
-- closing: e.g. "Kind regards,". The app adds the candidate's name below it."""
 
 
 def cover_letter_request(resume: dict, job_text: str, job_title: str = "", angle: str = "") -> tuple[str, str]:
@@ -294,16 +123,25 @@ def _settings_text(settings: dict | None) -> str:
     elif job_type == "Relocation":
         lines.append(f"relocation_to: {s.get('location') or 'the job location in the posting'}")
         lines.append(f"visa: {s.get('visa') or '(use that country usual skilled-work visa)'}")
+    lines.append(f"page_limit: {s.get('page_limit') or 2}")
+    lines.append(f"content_mode: {content_mode(s)}")
     for key in ("must_include", "must_exclude"):
         if s.get(key):
             lines.append(f"{key}: {s[key]}")
     return "\n".join(lines)
 
 
-def _confirmations_text(confirmations: dict | None) -> str:
-    """confirmations: {key: {"skill", "level"}} with level one of CONFIRM_LEVELS. Only "No" leaves a skill out."""
+def content_mode(settings: dict | None) -> str:
+    """"Strict" (evidence only, the default) or "Flexible" (keyword injection)."""
+    mode = (settings or {}).get("content_mode")
+    return mode if mode in CONTENT_MODES else "Strict"
+
+
+def _confirmations_text(confirmations: dict | None, mode: str = "Strict") -> str:
+    """confirmations: {key: {"skill", "level"}} with level one of CONFIRM_LEVELS."""
     if not confirmations:
-        return "(none given: inject every job skill)"
+        return ("(none given: inject every job skill)" if mode == "Flexible"
+                else "(none given: use only what the profile shows)")
     return "\n".join(f"- {c['skill']}: {c['level']}" for c in confirmations.values())
 
 
@@ -315,7 +153,8 @@ def _job_block(job_text: str, job_title: str, settings: dict | None, analysis: d
         f"{_title_block(job_title)}"
         f"<target_settings>\n{_settings_text(settings)}\n</target_settings>\n\n"
         f"<job_analysis>\n{analysis_json}\n</job_analysis>\n\n"
-        f"<skill_confirmations>\n{_confirmations_text(confirmations)}\n</skill_confirmations>\n\n"
+        f"<skill_confirmations>\n{_confirmations_text(confirmations, content_mode(settings))}\n"
+        "</skill_confirmations>\n\n"
     )
 
 
@@ -338,7 +177,7 @@ def tailor_request(master_resume: str, job_text: str, job_title: str = "", setti
         f"{_job_block(job_text, job_title, settings, analysis, confirmations)}"
         "Tailor the resume for this job following the rules, then self-check it."
     )
-    return TAILOR_PROMPT, content
+    return tailor_prompt(content_mode(settings)), content
 
 
 def revision_request(master_resume: str, job_text: str, resume: dict, ats_report: str, job_title: str = "",
@@ -356,7 +195,29 @@ def revision_request(master_resume: str, job_text: str, resume: dict, ats_report
         f"{history}"
         "Revise the resume to fix the issues in the ATS report, following the rules."
     )
-    return REVISION_PROMPT, content
+    return revision_prompt(content_mode(settings)), content
+
+
+def recruiter_request(resume: dict, job_text: str, job_title: str = "",
+                      analysis: dict | None = None) -> tuple[str, str]:
+    """(system prompt, user content) for the simulated recruiter review — use with RECRUITER_SCHEMA."""
+    analysis_json = json.dumps(analysis, ensure_ascii=False, separators=(",", ":")) if analysis else "(not given)"
+    content = (
+        f"<job_description>\n{job_text or '(not provided)'}\n</job_description>\n\n"
+        f"{_title_block(job_title)}"
+        f"<job_analysis>\n{analysis_json}\n</job_analysis>\n\n"
+        f"<resume>\n{json.dumps(resume, ensure_ascii=False, separators=(',', ':'))}\n</resume>\n\n"
+        "Review this resume for this job following the instructions."
+    )
+    return RECRUITER_PROMPT, content
+
+
+def parse_recruiter(text: str) -> dict:
+    """Read a pasted recruiter review (copy-paste mode)."""
+    result = normalize(_reply_json(text), RECRUITER_SCHEMA)
+    if not result["first_impression"] and not result["improvements"]:
+        raise TailorError("The pasted JSON doesn't contain a recruiter review. Paste Claude's whole reply.")
+    return result
 
 
 def normalize(value, schema: dict):
@@ -387,7 +248,7 @@ def normalize(value, schema: dict):
 
 def _call_claude(system: str, content: str, api_key: str | None, model: str, effort: str,
                  schema: dict = RESPONSE_SCHEMA) -> tuple[dict, str]:
-    client = anthropic.Anthropic(api_key=api_key or None)
+    client = anthropic.Anthropic(api_key=api_key or None, timeout=API_TIMEOUT_SECONDS, max_retries=2)
 
     response = client.messages.create(
         model=model,
@@ -412,7 +273,14 @@ def _call_claude(system: str, content: str, api_key: str | None, model: str, eff
     text = "".join(block.text for block in response.content if block.type == "text")
     u = response.usage
     usage = f"Model: {response.model} | tokens in: {u.input_tokens}, out: {u.output_tokens}"
-    return normalize(json.loads(text), schema), usage
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            data = _load_json(text[text.find("{"):text.rfind("}") + 1])
+        except json.JSONDecodeError:
+            raise TailorError("Claude's answer was not valid JSON. Try again.") from None
+    return normalize(data, schema), usage
 
 
 # --------------------------------------------------------------------------- #
@@ -557,6 +425,47 @@ def docx_to_text(source) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def pdf_to_text(data: bytes) -> str:
+    """Plain text of a text-based PDF resume; raises TailorError for scans and broken files."""
+    import ats  # lazy: ats imports pypdfium2
+    if not data.startswith(b"%PDF"):
+        raise TailorError("This file is not a PDF.")
+    try:
+        text = ats.pdf_text(data)
+    except Exception as e:  # pdfium raises its own error types for corrupt files
+        raise TailorError(f"Could not read the PDF: {e}") from None
+    if len(text.split()) < 40:
+        raise TailorError("Almost no text could be read from this PDF; it may be a scan or an image. "
+                          "Upload a DOCX or paste the text instead.")
+    return text
+
+
+def read_upload(name: str, data: bytes) -> str:
+    """Text of an uploaded resume (.pdf, .docx, .json, .md, .txt), validated."""
+    import io
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise TailorError(f"The file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+    suffix = Path(name).suffix.lower()
+    if suffix == ".pdf":
+        return pdf_to_text(data)
+    if suffix == ".docx":
+        try:
+            return docx_to_text(io.BytesIO(data))
+        except Exception as e:  # not a real .docx (zip) file
+            raise TailorError(f"Could not read the Word file: {e}") from None
+    if suffix not in (".json", ".md", ".txt"):
+        raise TailorError("Upload a .pdf, .docx, .json, .md or .txt file.")
+    try:
+        return prepare_master(data.decode("utf-8-sig"), suffix)
+    except UnicodeDecodeError:
+        raise TailorError("The file is not UTF-8 text.") from None
+    except json.JSONDecodeError as e:
+        raise TailorError(f"The JSON file is not valid: {e}") from None
+
+
 def prepare_master(text: str, suffix: str) -> str:
     if suffix.lower() == ".json":
         # Re-serialise compactly: same content, fewer input tokens.
@@ -565,8 +474,8 @@ def prepare_master(text: str, suffix: str) -> str:
 
 
 def _read_master(path: Path) -> str:
-    if path.suffix.lower() == ".docx":
-        return docx_to_text(path)
+    if path.suffix.lower() in (".docx", ".pdf"):
+        return read_upload(path.name, path.read_bytes())
     return prepare_master(path.read_text(encoding="utf-8"), path.suffix)
 
 
@@ -603,7 +512,8 @@ def safe_filename(name: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tailor a resume to a job description with Claude.")
-    parser.add_argument("--resume", default="master_resume.json", help="Master resume (.json, .docx, .md or .txt)")
+    parser.add_argument("--resume", default="master_resume.json",
+                        help="Master resume (.json, .pdf, .docx, .md or .txt)")
     parser.add_argument("--job", default="job_feedback.txt", help="Job description and/or ATS feedback")
     parser.add_argument("--out-dir", default="output", help="Output folder (e.g. a Google Drive for desktop folder)")
     parser.add_argument("--label", default="", help="Role for the file name (default: --title)")
@@ -615,6 +525,9 @@ def main() -> None:
     parser.add_argument("--timezone", default="", help="Remote jobs: your time zone, e.g. UTC+5")
     parser.add_argument("--relocate-to", default="", help="Relocation jobs: city and country, e.g. Berlin, Germany")
     parser.add_argument("--visa", default="", help="Relocation jobs: visa name (default: that country's usual one)")
+    parser.add_argument("--mode", default="Strict", choices=list(CONTENT_MODES),
+                        help="Strict = only what your resume shows (default); Flexible = every job keyword")
+    parser.add_argument("--pages", default=2, type=int, choices=[1, 2], help="Page limit")
     parser.add_argument("--engine", default="auto", choices=["auto", "claude-code", "api"],
                         help="claude-code = your Claude subscription via Claude Code; api = ANTHROPIC_API_KEY "
                              "(auto: Claude Code if installed, else the API)")
@@ -643,15 +556,19 @@ def main() -> None:
     config = {"engine": "code" if engine == "claude-code" else "api", "model_cli": "sonnet", "model_api": MODEL,
               "effort": EFFORT, "api_key": os.environ.get("ANTHROPIC_API_KEY")}
     settings = {"job_type": args.job_type, "timezone": args.timezone, "location": args.relocate_to,
-                "visa": args.visa}
+                "visa": args.visa, "content_mode": args.mode, "page_limit": args.pages}
     try:
-        # No skill confirmations on the command line: skills the resume doesn't show stay group D
+        # No skill confirmations on the command line: Strict mode uses only what the resume shows
         result, usage = engines.run(config, *tailor_request(master, job, args.title, settings))
         print(usage)
     except engines.EngineError as e:
         sys.exit(str(e))
 
-    resume = result["resume"]
+    import review  # imports this module, so import lazily
+    skills = [k for k in result["job_keywords"] if k.strip().lower() != clean_title(args.title).lower()]
+    resume, fixes = review.fix_resume(result["resume"], skills, {}, master, args.mode)
+    for note in fixes:
+        print(f"  fixed: {note}")
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = out_dir / output_stem(resume, args.label or args.title)

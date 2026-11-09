@@ -55,9 +55,14 @@ def run(config: dict, system: str, content: str, schema: dict | None = None) -> 
     schema: the JSON shape of the reply (default: the tailored-resume response).
     """
     schema = schema or main.RESPONSE_SCHEMA
-    if config["engine"] == "code":
+    if config["engine"] != "code":
+        return _run_api(config, system, content, schema)
+    try:
         return _run_claude_code(config, system, content, schema)
-    return _run_api(config, system, content, schema)
+    except EngineError as e:
+        if "structured_output" not in str(e):  # only the transient "couldn't fit the schema" failure
+            raise
+        return _run_claude_code(config, system, content, schema)  # one retry
 
 
 def _run_claude_code(config: dict, system: str, content: str, schema: dict) -> tuple[dict, str]:
@@ -135,5 +140,7 @@ def _run_api(config: dict, system: str, content: str, schema: dict) -> tuple[dic
                               "https://console.anthropic.com/settings/billing, or switch to Claude Code "
                               "(your subscription) in the sidebar.") from None
         raise EngineError(f"API error {e.status_code}: {e.message}") from None
+    except anthropic.APITimeoutError:
+        raise EngineError("The Anthropic API didn't answer in time. Try again, or pick a faster model.") from None
     except anthropic.APIConnectionError:
         raise EngineError("Could not reach the Anthropic API. Check your internet connection.") from None
