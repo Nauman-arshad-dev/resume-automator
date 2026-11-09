@@ -312,7 +312,7 @@ def build_docx(resume: dict, path, template: str = "classic", accent: str | None
     if resume["experience"]:
         heading("Experience")
         for job in resume["experience"]:
-            entry(job["title"], job["dates"], ", ".join(x for x in (job["company"], job["location"]) if x))
+            entry(job["title"], job["dates"], " – ".join(x for x in (job["company"], job["location"]) if x))
             bullets(job["bullets"])
     if resume["projects"]:
         heading("Projects")
@@ -327,6 +327,9 @@ def build_docx(resume: dict, path, template: str = "classic", accent: str | None
     if resume["certifications"]:
         heading("Certifications")
         bullets(resume["certifications"])
+    if resume.get("languages"):
+        heading("Languages")
+        doc.add_paragraph(" · ".join(resume["languages"]))
 
     doc.save(path)
 

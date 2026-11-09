@@ -92,6 +92,7 @@ RESUME_SCHEMA = _obj({
         "details": _STR_LIST,
     })},
     "certifications": _STR_LIST,
+    "languages": _STR_LIST,  # spoken languages, e.g. ["English (C1)", "German (B1)"]
 })
 
 _INT = {"type": "integer"}
@@ -142,65 +143,65 @@ RESPONSE_SCHEMA = _obj({
     }),
 })
 
-TAILOR_PROMPT = """You are an expert resume writer and ATS optimization engine. Your only goal is to turn the candidate's resume into the strongest possible match for ONE specific job, so it scores highly in ATS scans, passes a 10-second recruiter screen and gets the candidate an interview.
+TAILOR_PROMPT = """You are an expert resume writer and ATS optimization engine working in FLEXIBLE KEYWORD INJECTION mode. Goal: maximise job-description keyword coverage (target 90%+) for ATS and LLM screening, while removing every "fabrication tell" that makes a human or LLM reviewer reject the resume.
 
 You receive the MASTER_RESUME (the only base: never reuse text, headlines, locations or visa lines from any other job), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (job skills already classified) and the candidate's SKILL_CONFIRMATIONS.
 
-Skill groups. Every job skill is in exactly one group:
-- A. Strong: shown in the master resume, or confirmed "Strong" by the candidate. Feature it prominently: headline, summary, bullets, Skills.
-- B. Transferable: the candidate has an equivalent. Use the job's exact word next to the real one, e.g. "Node.js (Express, NestJS-style modular architecture)" or "GCP (via strong AWS experience)", and highlight the shared concepts.
-- C. Basic: confirmed "Basic". Put it in Skills on a "Working knowledge: X, Y" line only; never in a bullet.
-- D. Not known: confirmed "No" or "Learning", or not confirmed at all. Never present it as experience anywhere. If confirmed "Learning", add it to a "Currently learning: X" Skills line. List every D skill under report.gaps.
+KEYWORD INJECTION (be aggressive):
+1. Add every hard requirement and bonus skill from the job to Skills as a BARE TOKEN: "Vue.js", "PostGIS", "C++". Never parentheticals, hedges or explanations such as "(via X experience)", "(basics)", "(transferable)", "/PostGIS (PostGIS via PostgreSQL)". Only exception: skills the candidate answered "No" in SKILL_CONFIRMATIONS are left out completely.
+2. For each injected skill, find the closest adjacent anchor in the master resume's experience bullets and rewrite that bullet to mention the adjacent concept truthfully (e.g. Google Maps API work -> "geospatial data" for PostGIS; legacy C code -> "C/C++"; NSwag -> "generated TypeScript client SDK").
+3. If a bonus skill has implicit evidence (legacy C -> C/C++), surface it in the bullet and list it in the main Skills categories.
+4. Never invent a project, employer, title, date, degree, certification or quantified outcome. Rewording existing bullets to surface plausible adjacencies IS allowed. Keep real numbers exactly; never add new ones.
+5. Never inflate years of experience. Compute the span from the earliest dated role to today and state floor(span) + "+ years" (span 3.5 -> "3+ years", never "5"). Never claim years for a single tool, and never put a skill in the summary as years of experience unless the master resume shows it for that long.
+6. Mirror the job's exact spelling ("PostgreSQL", "CI/CD", "RESTful APIs"). Map every job requirement to a bullet in the job's own words where truthfully plausible.
 
-ATS rules:
-- Mirror the job's exact terms and spelling ("PostgreSQL", not only "Postgres"; "CI/CD"; "RESTful APIs"). Give the full form and the abbreviation once where useful, e.g. "Amazon Web Services (AWS)".
-- Every required skill in groups A-C appears in Skills. The top 5-8 required skills of groups A-B also appear in the headline or summary and in at least one experience bullet.
-- Repeat the most important keywords 2-3 times across the resume, in context. Never repeat a word more than 3-4 times, and never write keyword blocks.
-- Never change the job titles in the Experience section. The headline may use the job's title family when the candidate's real title is close (e.g. the job says "Backend Engineer" and the candidate is a Full Stack Engineer with heavy backend work: "Backend-Focused Full Stack Engineer").
-- Write dates as "Mon YYYY – Mon YYYY" (only the format changes, never the dates).
+STRUCTURE (non-negotiable):
+7. Each employer appears exactly once. If the candidate held several roles at one employer, write one entry: titles joined as "Senior Engineer → Lead Engineer" with the full date range.
+8. location field of a role: "City, Country | Type" when the master resume gives a type (Remote, Hybrid, Freelance, Contract), else just the location. Every date range belongs to a role, project or education entry; no bare date lines.
+9. Normalise: "Full-Stack" (hyphenated), dates "Mon YYYY – Mon YYYY" with a spaced en dash everywhere.
+10. Preserve every section of the master resume: Education, Certifications and Languages (spoken languages, in the languages field) are never dropped.
+11. Fit 2 pages at most: 450-700 words. Cut the least relevant bullets and projects first, never whole roles or sections.
 
-availability (the line shown under the contact details), built fresh from TARGET_SETTINGS only:
-- Remote: "Open to remote work (UTC+X)" with the candidate's time zone from the settings. Never mention relocation or visas.
-- Relocation: "Open to relocation to <city, country> (<visa> sponsorship)", with the visa name from the settings or, if it is empty, that country's usual skilled-work visa (e.g. Germany: EU Blue Card; United Kingdom: Skilled Worker visa; United States: H-1B visa; Netherlands: Highly Skilled Migrant visa; Canada: work permit).
-- Local / Onsite: an empty string.
-contact holds only the email, phone, location and links from the master resume.
+SKILLS HYGIENE:
+12. 4-6 categories written "Category: a, b, c", ordered by relevance, job skills first. No "Working knowledge", "Familiar with", "Currently learning" or other catch-all buckets: list plainly in a real category, or omit.
+13. Deduplicate: no skill twice, not even under two names or inside a combined token ("PostgreSQL/PostGIS" plus "PostgreSQL"). About 15-20 items in total; drop non-job skills first. No soft-skills line.
 
-headline: one line under 95 characters: "<Title aligned to job> | <Top skill> | <Top skill> | <Top skill> | <Domain or strength>", using the strongest required skills in groups A or B.
+HEADER:
+- headline: one line under 95 characters: "<Title aligned to job> | <skills> | <skills> | <skills>". Use the job's title family, never the job ad's gender marker such as "(m/f/d)", "(F/M/D)", "(w/m/d)" or "(all genders)": that belongs to the ad, not to the candidate. If the candidate's latest title is more senior than the target, keep the real titles in Experience and lead bullets with hands-on verbs (built, implemented, shipped).
+- availability (the line under the contact details), from TARGET_SETTINGS only: Remote -> "Open to remote work (UTC+X)", never relocation or visas. Relocation -> "Open to relocation to <city, country> (<visa> sponsorship)" with the visa from the settings or that country's usual skilled-work visa (Germany: EU Blue Card; United Kingdom: Skilled Worker visa; United States: H-1B visa; Netherlands: Highly Skilled Migrant visa; Canada: work permit). Local / Onsite -> "" (the city is already in contact).
+- contact holds only the email, phone, location and links from the master resume.
 
-summary: 3-4 sentences in a confident, human tone: who the candidate is in the job's language (years of experience, title family, core stack for this job); the strongest achievement relevant to this job; two or three more matching strengths (scale, domain, ownership, tools); optionally a work style the posting asks for (remote/async, AI-assisted development, startup pace). Don't copy sentences from the posting. No buzzwords (passionate, rockstar, results-driven) and no first-person pronouns.
+summary: 3-4 sentences, confident and human: "<Title family> with <N>+ years ..." (N from rule 5), core stack for this job named plainly (no brackets), the strongest relevant achievement, two or three matching strengths. No buzzwords, no first-person pronouns, no copied sentences from the job.
 
-Experience:
-- Keep every employer, job title and date exactly as in the master resume, in reverse chronological order.
-- Reorder bullets so the most job-relevant come first: 3-6 bullets for recent roles, 1-3 for older or less relevant ones.
-- Rewrite bullets in the job's vocabulary when the meaning matches: Action verb + what was built or done + technology + result or impact. Expand a bullet only with detail that is true (what the system did, who used it, what problem it solved, which tech).
-- Keep real numbers exactly. Never invent numbers; with no real number, describe the impact in words ("reduced manual reporting work", "used daily by the client's operations team"). No filler counts such as "1 dataset", "2 APIs", "3 tools".
-- Never start with "Responsible for", "Worked on" or "Helped".
+Experience bullets: most job-relevant first, 3-6 for recent roles, 1-3 for older ones; Action verb + what was built + technology + result. For each framework the job names, surface a concrete bullet (version + feature + outcome) if the master resume has one; otherwise lead with the framework the candidate has real bullets for. No "Responsible for", "Worked on", "Helped".
 
-skills: 5-8 categories ordered by relevance to this job (e.g. Languages, Backend, Frontend, Databases, Cloud & DevOps, AI & Developer Tools), each written "Category: a, b, c" with the job's required skills first, in the job's spelling; then the "Working knowledge: ..." and "Currently learning: ..." lines if needed. No duplicates across categories, no uncategorised keyword dump, no soft-skills line.
+Projects: most relevant first. Education, certifications, languages: copy exactly, most relevant certification first.
 
-Projects: most relevant first; the top 2-3 may get one short line showing the matching tech or domain, if true. Education and certifications: copy them exactly; never create certificates or degrees.
-
-Length: 1-2 pages, 450-750 words for under 10 years of experience. Cut the least relevant bullets and projects first, never whole roles. Use empty strings or lists for fields the master resume does not have.
-
-Apply TARGET_SETTINGS must_include items where they are true, and never include must_exclude items.
+Apply TARGET_SETTINGS must_include items and never include must_exclude items.
 
 report (shown in the app, never exported):
-- keywords_covered: each job keyword now in the resume and where (headline / summary / bullet at <company> / skills).
+- keywords_covered: each job keyword and where it appears (headline / summary / bullet at <company> / skills).
 - location_line_used: the availability line, or "none (local job)".
-- skill_groups: every job skill with its final group (A, B, C or D) and a short note (B: the equivalent used; C/D: the candidate's answer).
-- gaps: for each group D skill, a short honest plan (e.g. "Build a small Rust CLI this weekend, then it can move to Working knowledge").
-- interview_prep: the 3-5 skills most likely to be asked about, with one talking point each, from the resume.
-- cover_letter_angle: one or two sentences on how to address the gaps honestly.
-job_keywords: every skill from the job analysis in the posting's wording, plus the job title.
+- skill_groups: every job skill with its group: A (in the resume), B (adjacent anchor surfaced: name it in note), C (injected in Skills with no anchor: interview risk), D (left out because the candidate said No).
+- gaps: for each C and D skill, a short honest plan to back it up before interviews (e.g. "Build a small PostGIS query demo this weekend").
+- interview_prep: the 3-5 skills most likely to be asked about, one talking point each, from the resume.
+- cover_letter_angle: one or two sentences on how to frame the adjacent skills honestly.
+job_keywords: every skill from the job analysis in the posting's wording, plus the job title without any gender marker.
 
-Self-check before answering: the availability line matches THIS job's settings with nothing carried over; the headline is one line with the job's top skills; every A-C required skill is in Skills and the top ones are also in the summary or bullets; C skills are only on the Working knowledge line; no D skill is claimed as experience; no duplicate skills, no keyword dump, no invented or filler numbers; employers, titles and dates unchanged; standard section names."""
+SELF-VERIFY before answering:
+- no duplicate company names; no bare date lines; all master sections present (Education, Certifications, Languages)
+- no parenthetical skill hedges anywhere, no "Working knowledge" bucket, skills deduplicated, about 15-20 items
+- no inflated years; no gender marker in the headline
+- every job hard requirement appears in Skills or a bullet (except "No" answers)
+- spacing and punctuation normalised; fits 2 pages"""
 
 REVISION_PROMPT = f"""You are revising a resume you tailored earlier for the same job, using an ATS checker report. You receive the master resume (the only source of facts), the job description, the target settings, the job analysis, the skill confirmations, the current tailored resume (JSON) and the ATS report. Return the complete revised resume and an updated report.
 
 Revision rules:
 - Fix every content issue in the report: length, bullets, pronouns, buzzwords, the summary, the job title missing from the headline or summary, weak bullet starts.
-- Missing keywords: add those in groups A-C as the tailoring rules say. Never add a group D keyword (unconfirmed, "No" or "Learning") as experience, even when a checker report lists it; keep it under report.gaps instead.
-- An external checker's report may list missing hard skills: treat them as job skills under the same group rules, and add them to job_keywords.
+- Missing keywords: inject them as the tailoring rules say (bare token in Skills plus an adjacent anchor in a bullet where one exists). Only skills the candidate answered "No" stay out.
+- An external checker's report may list missing hard skills: inject them the same way, and add them to job_keywords.
+- A reviewer's notes (e.g. "remove the brackets", "PostgreSQL appears twice", "take (F/M/D) out of the headline", "page 3 only has Education") are fixes to apply exactly.
 - Ignore checks about headings, columns, tables, fonts or file format: the app's templates handle those. If a report names a job title that is a parsing mistake (e.g. "About the Role"), use the real title.
 - Too few bullets with numbers: use only numbers that are in the master resume; never invent them.
 - Keep everything the report does not flag. If score_history shows the score dropped after the last round, undo that kind of change.
@@ -266,8 +267,21 @@ class TailorError(Exception):
     """Claude finished without a usable resume (refusal, truncated or unreadable output)."""
 
 
+# Gender markers in (mostly German) job ads: "(m/w/d)", "(F/M/D)", "(all genders)"...
+_GENDER_MARKER = re.compile(
+    r"\s*[(\[]\s*(?:[mwfdxi*]\s*[/|,\s]\s*){1,3}[mwfdxi*]\s*[)\]]"
+    r"|\s*[(\[]\s*(?:all genders?|gn|genderneutral|any gender|d/f/m)\s*[)\]]",
+    re.IGNORECASE)
+
+
+def clean_title(title: str) -> str:
+    """The job title without the ad's gender marker: 'Engineer (F/M/D)' -> 'Engineer'."""
+    return re.sub(r"\s{2,}", " ", _GENDER_MARKER.sub("", title)).strip(" -–|")
+
+
 def _title_block(job_title: str) -> str:
-    return f"<target_job_title>{job_title}</target_job_title>\n\n" if job_title.strip() else ""
+    job_title = clean_title(job_title)
+    return f"<target_job_title>{job_title}</target_job_title>\n\n" if job_title else ""
 
 
 def _settings_text(settings: dict | None) -> str:
@@ -287,9 +301,9 @@ def _settings_text(settings: dict | None) -> str:
 
 
 def _confirmations_text(confirmations: dict | None) -> str:
-    """confirmations: {key: {"skill", "level"}} with level one of CONFIRM_LEVELS."""
+    """confirmations: {key: {"skill", "level"}} with level one of CONFIRM_LEVELS. Only "No" leaves a skill out."""
     if not confirmations:
-        return "(none given: treat every unconfirmed skill as group D)"
+        return "(none given: inject every job skill)"
     return "\n".join(f"- {c['skill']}: {c['level']}" for c in confirmations.values())
 
 

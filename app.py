@@ -40,12 +40,13 @@ MODELS = {  # label -> (API model id, Claude Code alias)
     "Haiku 5.5 · fastest": ("claude-haiku-5-5", "haiku"),
 }
 EFFORTS = ["low", "medium", "high"]
-LEVEL_HELP = {
+LEVEL_HELP = {  # flexible keyword injection: everything except "No" is listed in Skills
     "Strong": "Used it for real work",
-    "Basic": "Used it a little or learned it → Working knowledge line",
-    "Learning": "Learning it now → Currently learning line",
-    "No": "No exposure → not claimed, listed as a gap",
+    "Basic": "Know it a little",
+    "Learning": "Learning it now",
+    "No": "Leave it out",
 }
+MAX_PAGES = 2
 # Per-job state: cleared by "New job" (the master resume and skill answers stay)
 JOB_KEYS = {"versions", "job_keywords", "analysis", "analysis_for", "cover_letter", "filename", "notice",
             "job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
@@ -218,10 +219,23 @@ def run_claude(label: str, system: str, content: str, schema: dict | None = None
 
 
 def polish(result: dict, ctx: dict) -> dict:
-    """Safety nets after every Claude reply: confirmed Basic/Learning skills on their lines, length in limits."""
-    resume = review.ensure_confirmed_lines(result["resume"], ctx["confirmations"], ctx["job_skills"])
-    resume, _ = ats.trim_to_length(resume, st.session_state.get("job_keywords", []))
-    return {**result, "resume": resume}
+    """Safety nets after every Claude reply: mechanical clean-up, word limit, and at most MAX_PAGES pages."""
+    resume, fixes = review.fix_resume(result["resume"], ctx["job_skills"], ctx["confirmations"])
+    keywords = st.session_state.get("job_keywords", [])
+    resume, removed = ats.trim_to_length(resume, keywords)
+    view = (ctx["template"], ctx["accent"], ctx["page"], ctx["font"], ctx["size"])
+    for _ in range(6):  # page 3 with only Education on it: cut the least relevant bullets until it fits
+        pages = render.pdf_page_count(make_files(as_json(resume), *view)[0])
+        if pages <= MAX_PAGES:
+            break
+        resume, cut = ats.trim_to_length(resume, keywords, ats.count_words(ats.resume_text(resume)) - 50)
+        if not cut:
+            break
+        removed += cut
+    if removed:
+        fixes.append(f"Length: removed {removed} of the least relevant bullet{'s' if removed != 1 else ''} "
+                     f"to stay within {MAX_PAGES} pages.")
+    return {**result, "resume": resume, "fixes": fixes}
 
 
 def build_resume(ctx: dict) -> None:
@@ -303,7 +317,7 @@ def confirm_widgets(skills: list[dict], saved_answers: dict) -> None:
                                        if meta_bits else "")
         st.markdown(label, unsafe_allow_html=True)
         st.radio(s["skill"], main.CONFIRM_LEVELS, index=None, key=key, horizontal=True,
-                 label_visibility="collapsed", captions=[LEVEL_HELP[x].split(" →")[0] for x in main.CONFIRM_LEVELS])
+                 label_visibility="collapsed", captions=[LEVEL_HELP[x] for x in main.CONFIRM_LEVELS])
 
 
 def answer_unanswered(skills: list[str], level: str) -> None:
@@ -390,7 +404,8 @@ new_col.button("🆕 New job", on_click=new_job, width="stretch",
 with reset_col.popover("♻️ Reset", width="stretch"):
     st.markdown("Forget **everything**: master resume, job, skill answers and results.")
     st.button("Yes, reset everything", on_click=reset_everything, type="primary")
-st.caption("Built fresh from your master resume for each job. Claude never claims a skill you haven't confirmed.")
+st.caption("Built fresh from your master resume for each job: every job keyword in Skills, linked to your "
+           "closest real experience, with no invented employers, dates or numbers.")
 if notice := st.session_state.pop("notice_top", None):
     st.info(notice)
 
@@ -504,7 +519,7 @@ skill_names: dict[str, str] = {}
 confirmations: dict = {}
 unanswered: list[str] = []
 if analysis:
-    title = job_title or analysis["job_title"]
+    title = main.clean_title(job_title or analysis["job_title"])
     info = [f"**{title}**"] + [x for x in (analysis["company"], analysis["job_location"], analysis["seniority"]) if x]
     st.markdown(" · ".join(info))
     skills = analysis["skills"]
@@ -518,9 +533,10 @@ if analysis:
         st.markdown("🔁 **Transferable:** " + " ".join(f":blue-background[{s['skill']} ← {s['evidence']}]"
                                                       for s in transferable))
     if to_confirm:
-        st.markdown(f"❓ **Not in your resume — how well do you know these?** ({len(to_confirm)})")
-        st.caption("Interviewers ask about every skill listed, so only Strong and Basic go on your resume. "
-                   "Your answers are remembered for future jobs.")
+        st.markdown(f"❓ **Not in your resume yet** ({len(to_confirm)}) — all of them are added to Skills and "
+                    "linked to your closest real experience. Optional: mark **No** for any you never want listed.")
+        st.caption("Interviewers may ask about every listed skill: the ATS report gives a quick plan for each one "
+                   "without a real anchor. Answers are remembered for future jobs.")
         b1, b2, _ = st.columns([1, 1, 2])
         names = [s["skill"] for s in to_confirm]
         b1.button("Mark unanswered as Basic", on_click=answer_unanswered, args=(names, "Basic"), width="stretch")
@@ -537,7 +553,7 @@ if analysis:
     confirmations = {k: v for k, v in answers.items() if k in job_keys}
     unanswered = [s["skill"] for s in to_confirm if skill_key(s["skill"]) not in confirmations]
 else:
-    title = job_title
+    title = main.clean_title(job_title)
 
 # --------------------------------------------------------------------------- #
 # Shared context for building and improving
@@ -567,8 +583,7 @@ ctx = {"template": template, "accent": accent, "page": page, "font": font, "size
 # --------------------------------------------------------------------------- #
 auto_build = st.session_state.pop("auto_build", False)  # set once, right after an analysis
 if analysis:
-    missing_bits = (["the job type"] if not job_type else []) + \
-                   ([f"{len(unanswered)} skill answer{'s' if len(unanswered) != 1 else ''}"] if unanswered else [])
+    missing_bits = ["the job type"] if not job_type else []  # skill answers are optional
     can_build = not missing_bits and claude_ready
     if missing_bits:
         st.warning("To build your resume, choose " + " and ".join(missing_bits) + ".")
@@ -589,7 +604,7 @@ if analysis:
     else:
         clicked = st.button(f"✨ Build my resume and optimize to {target}%", type="primary", width="stretch",
                             disabled=not can_build)
-        if clicked or (auto_build and can_build):
+        if clicked or (auto_build and can_build and not unanswered):  # new skills: let them be seen first
             build_resume(ctx)
 
 if not versions():
@@ -618,6 +633,8 @@ previous = vs[-2]["score"] if len(vs) > 1 else None
 match_before = ats.keyword_coverage(master, job_keywords)
 match_after = round(100 * len(report.matched) / len(job_keywords)) if job_keywords else 0
 issues = review.review(resume, master, confirmations, analysis, target_settings)
+if len(pages) > MAX_PAGES:
+    issues.append(f"The PDF has {len(pages)} pages; keep it to {MAX_PAGES} (try Text size: Small, or Auto-improve).")
 
 st.divider()
 if notice := st.session_state.pop("notice", None):
@@ -740,8 +757,13 @@ with tab_report:
         for msg in issues:
             st.markdown(f"⚠️ {msg}")
     else:
-        st.markdown("✅ Nothing to review: every skill is backed by your resume or your answers, no duplicates, "
-                    "headline fits one line, location line matches the job type, and every number is real.")
+        st.markdown("✅ Nothing to review: no bracket hedges, no duplicate skills or employers, no inflated years, "
+                    "all sections kept, headline fits one line, location line matches the job type, every number "
+                    f"is real, and it fits {MAX_PAGES} pages.")
+    if result.get("fixes"):
+        with st.expander(f"🧹 Fixed automatically in this version ({len(result['fixes'])})"):
+            for note in result["fixes"]:
+                st.markdown(f"- {note}")
 
     m1, m2 = st.columns(2)
     m1.markdown(f"**Keyword match:** {match_before}% in your master resume → **{match_after}%** now")
@@ -750,7 +772,8 @@ with tab_report:
                 f"{resume.get('availability') or part_b['location_line_used'] or 'none (local job)'}")
 
     groups = {g: [s for s in part_b["skill_groups"] if s["group"].strip().upper()[:1] == g] for g in "ABCD"}
-    names = {"A": "A · Strong", "B": "B · Transferable", "C": "C · Basic", "D": "D · Not known"}
+    names = {"A": "A · In your resume", "B": "B · Linked to your experience", "C": "C · Listed, no anchor",
+             "D": "D · Left out (No)"}
     for col, g in zip(st.columns(4), "ABCD"):
         col.markdown(f"**{names[g]}** ({len(groups[g])})")
         for s in groups[g]:

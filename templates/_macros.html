@@ -41,7 +41,7 @@
   {% for j in r.experience %}
   <div class="entry">
     <div class="row"><span class="title">{{ j.company if company_first else j.title }}</span><span class="dates">{{ j.dates }}</span></div>
-    <div class="sub">{{ [j.title if company_first else j.company, j.location] | select | join(" · ") }}</div>
+    <div class="sub">{{ [j.title if company_first else j.company, j.location] | select | join(" – ") }}</div>
     {{ bullets(j.bullets) }}
   </div>
   {% endfor %}
@@ -68,6 +68,8 @@
 {% endcall %}{% endif %}
 {%- endmacro %}
 
+{#- Certifications, then Languages: the last sections of every design -#}
 {% macro certifications(r, title="Certifications") -%}
 {% if r.certifications %}{% call section(title, "sec-certs") %}{{ bullets(r.certifications) }}{% endcall %}{% endif %}
+{% if r.languages %}{% call section("Languages", "sec-languages") %}<div>{{ r.languages | join(" · ") }}</div>{% endcall %}{% endif %}
 {%- endmacro %}
