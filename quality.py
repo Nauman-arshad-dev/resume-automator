@@ -97,6 +97,25 @@ def language_issues(resume: dict) -> list[Issue]:
     return issues
 
 
+SKILLS_ONLY = "Skills only"
+
+
+def skills_only(resume: dict, master: str, analysis: dict) -> list[Issue]:
+    """Job requirements the profile proves but this resume only lists in Skills, never in the summary or a bullet."""
+    body = " ".join([resume["headline"], resume["summary"]] + [b for j in resume["experience"] for b in j["bullets"]]
+                    + [b for p in resume["projects"] for b in p["bullets"]])
+    skills_text = " ".join(resume["skills"])
+    master_norm = evidence.normalise(master)
+    thin = [s["skill"] for s in analysis.get("skills", [])
+            if evidence.mentions(skills_text, s["skill"]) and not evidence.mentions(body, s["skill"])
+            and evidence.status(s["skill"], master, {}, master_norm) == "verified"]
+    if not thin:
+        return []
+    return [Issue(WARNING, SKILLS_ONLY, "Your profile shows these job requirements, but this resume only lists them "
+                                        "in Skills: " + ", ".join(thin) + ". Mention them in the summary or the "
+                                        "bullet where you used them.")]
+
+
 def gate(resume: dict, master: str, confirmations: dict | None, analysis: dict | None, settings: dict,
          job_skills: list[str] | None = None, pages: int | None = None, max_pages: int = 2) -> list[Issue]:
     """Every issue to review before export, serious first."""
@@ -149,6 +168,8 @@ def gate(resume: dict, master: str, confirmations: dict | None, analysis: dict |
     if buzz:
         issues.append(Issue(WARNING, "Language", "Empty buzzwords: " + ", ".join(buzz) + "."))
 
+    if master and analysis:
+        issues += skills_only(resume, master, analysis)
     issues += duplicate_bullets(resume) + language_issues(resume)
     if pages and pages > max_pages:
         issues.append(Issue(WARNING, "Layout", f"The PDF has {pages} pages; the target is {max_pages}. "

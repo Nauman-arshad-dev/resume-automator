@@ -47,7 +47,7 @@ SYNONYM_GROUPS: list[tuple[str, ...]] = [
     ("customer satisfaction", "csat"), ("net promoter score", "nps"),
     ("human resources", "hr"), ("applicant tracking system", "ats"), ("learning and development", "l&d"),
     ("electronic health records", "ehr", "emr", "electronic medical records"),
-    ("quality assurance", "qa"), ("test automation", "automated testing"),
+    ("quality assurance", "qa"), ("test automation", "automated testing", "automated tests", "unit tests", "unit testing"),
     ("infrastructure as code", "iac"), ("site reliability engineering", "sre"),
     ("object-oriented programming", "oop", "object oriented programming"),
     ("agile", "scrum", "kanban"), ("b2b", "business-to-business"), ("b2c", "business-to-consumer"),

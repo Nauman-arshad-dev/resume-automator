@@ -292,7 +292,9 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> No
             resume = versions()[-1]["result"]["resume"]
             before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"],
                                ctx["page_limit"])
-            serious = [i for i in gate_for(resume, ctx) if i.severity == quality.SERIOUS]
+            gate_now = gate_for(resume, ctx)
+            serious = [i for i in gate_now if i.severity == quality.SERIOUS]
+            thin = [i for i in gate_now if i.area == quality.SKILLS_ONLY]
             first_with_input = n == 1 and bool(ext_report or ctx.get("new_answers"))
             if before.score >= target and not first_with_input and not serious:
                 status.write(f"Score {before.score} already meets your target of {target}.")
@@ -301,6 +303,8 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> No
             report_text = before.as_text()
             if serious:
                 report_text += "\n\nQuality review (fix these first):\n" + "\n".join(f"- {i.message}" for i in serious)
+            if thin:
+                report_text += "\n\nAlso: " + thin[0].message + " Use only how the profile describes them."
             if ext_report and n == 1:
                 report_text += f"\n\nReport from an external ATS checker or reviewer:\n{ext_report}"
             progress = ", ".join(f"v{i + 1}: {v['score']}" for i, v in enumerate(versions()) if v["score"] is not None)
