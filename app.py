@@ -248,7 +248,7 @@ def run_claude(label: str, system: str, content: str, schema: dict | None = None
 def polish(result: dict, ctx: dict) -> dict:
     """Safety nets after every Claude reply: evidence-aware clean-up, word limit, and the page limit."""
     resume, fixes = review.fix_resume(result["resume"], ctx["job_skills"], ctx["confirmations"], ctx["master"],
-                                      main.content_mode(ctx["settings"]))
+                                      main.content_mode(ctx["settings"]), ctx["job_title"])
     keywords = st.session_state.get("job_keywords", [])
     limit = ctx["page_limit"]
     resume, removed = ats.trim_to_length(resume, keywords, ats.words_for_pages(limit)[1] - 40)

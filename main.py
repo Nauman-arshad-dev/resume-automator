@@ -566,7 +566,7 @@ def main() -> None:
 
     import review  # imports this module, so import lazily
     skills = [k for k in result["job_keywords"] if k.strip().lower() != clean_title(args.title).lower()]
-    resume, fixes = review.fix_resume(result["resume"], skills, {}, master, args.mode)
+    resume, fixes = review.fix_resume(result["resume"], skills, {}, master, args.mode, clean_title(args.title))
     for note in fixes:
         print(f"  fixed: {note}")
     out_dir = Path(args.out_dir)

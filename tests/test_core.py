@@ -170,6 +170,36 @@ class TestQualityGate(unittest.TestCase):
         self.assertTrue(any("9" in m and "Numbers" in m for m in serious))
 
 
+class TestUserReportedFixes(unittest.TestCase):
+    """From a real VentureDev 'Senior Full Stack Developer' build."""
+
+    def setUp(self):
+        self.resume = main.normalize({
+            "name": "N", "headline": "Senior Full-Stack Developer | Node.js", "contact": ["a@b.com"],
+            "summary": "Senior Full-Stack Developer with 5+ years.",
+            "skills": ["Backend: Node.js", "Tools & Technologies: Backend API development, Performance optimization"],
+            "experience": [{"title": "Freelance Full-Stack Developer", "company": "Fiverr", "location": "",
+                            "dates": "Aug 2021 – Present", "bullets": [
+                                "Launched three production SaaS applications (Tracio, Social Cleaner Pro) covering "
+                                "real-time monitoring, subscription billing and analytics."]}],
+            "projects": [{"name": "Tracio", "bullets": [
+                "Launched as a production SaaS with real-time monitoring, subscription billing and analytics."]}],
+        }, main.RESUME_SCHEMA)
+
+    def test_follows_the_job_titles_spelling(self):
+        fixed, _ = review.fix_resume(self.resume, [], {}, job_title="Senior Full Stack Developer")
+        self.assertTrue(fixed["headline"].startswith("Senior Full Stack Developer"))
+        fixed, _ = review.fix_resume(self.resume, [], {}, job_title="Full-Stack Engineer")
+        self.assertIn("Full-Stack", fixed["headline"])
+
+    def test_practices_are_not_tools(self):
+        fixed, _ = review.fix_resume(self.resume, [], {})
+        self.assertIn("Core Competencies: Backend API development, Performance optimization", fixed["skills"])
+
+    def test_project_bullet_copying_a_job_bullet(self):
+        self.assertTrue(quality.duplicate_bullets(self.resume))
+
+
 class TestPromptsAndRequests(unittest.TestCase):
     def test_mode_selects_prompt(self):
         system, content = main.tailor_request("profile", "job", "Accountant", {"content_mode": "Strict",

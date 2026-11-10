@@ -262,7 +262,8 @@ def check(resume: dict, pdf_bytes: bytes, job_keywords: list[str] | None = None,
     # Job match
     if job_title.strip():
         head = f"{resume['headline']} {resume['summary']}".lower()
-        add("Job match", f"Mentions the job title \"{job_title}\"", job_title.lower() in head,
+        same = lambda t: re.sub(r"[\s-]+", " ", t.lower())  # noqa: E731 — "Full-Stack" = "Full Stack"
+        add("Job match", f"Mentions the job title \"{job_title}\"", same(job_title) in same(head),
             "The exact job title is not in your headline or summary.",
             "Put the exact job title in your headline, if it truthfully describes you.", 6)
     keywords = list(dict.fromkeys(k.strip() for k in (job_keywords or []) if k.strip()))

@@ -63,8 +63,16 @@ def _dehedge(text: str) -> str:
     return re.sub(r"\s{2,}", " ", HEDGE.sub("", text)).strip()
 
 
-def _full_stack(text: str) -> str:
-    return FULL_STACK.sub(lambda m: "Full-Stack" if m.group(0)[0].isupper() else "full-stack", text)
+def _full_stack(text: str, hyphen: bool = True) -> str:
+    """One spelling everywhere: the job's own ("Full Stack" or "Full-Stack"), hyphenated by default."""
+    sep = "-" if hyphen else " "
+    return FULL_STACK.sub(lambda m: f"Full{sep}Stack" if m.group(0)[0].isupper() else f"full{sep}stack", text)
+
+
+def _is_competency(item: str) -> bool:
+    """'Performance optimization', 'Mentoring engineers': a practice, not a tool or technology."""
+    words = item.split()
+    return len(words) >= 2 and words[-1].isalpha() and words[-1].islower()
 
 
 DATE_SEP = re.compile(r"\s*[–—]\s*|\s+-\s+|\s+to\s+|\s+bis\s+|(?<=\d)-(?=\s*(?:\d{4}|[A-Za-z]))", re.IGNORECASE)
@@ -123,7 +131,7 @@ def skill_items(resume: dict) -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 
 def fix_resume(resume: dict, job_skills: list[str], confirmations: dict, master: str = "",
-               mode: str = "Strict") -> tuple[dict, list[str]]:
+               mode: str = "Strict", job_title: str = "") -> tuple[dict, list[str]]:
     """Mechanical clean-up; returns (fixed copy, notes on what changed).
 
     With the master resume given, Strict mode also removes Skills items the profile doesn't
@@ -211,6 +219,19 @@ def fix_resume(resume: dict, job_skills: list[str], confirmations: dict, master:
         missing = []  # nothing to check the evidence against: never add skills blindly
     if missing:
         extra["items"] += missing
+    # Practices ("Performance optimization") in the tools line read oddly: give them their own category
+    practices = [i for i in extra["items"] if _is_competency(i)]
+    if practices:
+        comp = next((g for g in groups if re.search(r"competenc|practice", g["label"], re.IGNORECASE)), None)
+        if comp is None and len(practices) == len(extra["items"]):
+            extra["label"] = "Core Competencies"  # the whole line is practices: just name it right
+        else:
+            if comp is None:
+                comp = {"label": "Core Competencies", "items": []}
+                groups.append(comp)
+            extra["items"] = [i for i in extra["items"] if i not in practices]
+            comp["items"] += practices
+    if missing:
         notes.append("Skills: added job skills " + ("you have" if strict else "that were missing") + ": "
                      + ", ".join(missing) + ".")
 
@@ -230,15 +251,16 @@ def fix_resume(resume: dict, job_skills: list[str], confirmations: dict, master:
 
     # Spelling and dates
     before = (r["headline"], r["summary"], [j["title"] for j in r["experience"]])
-    r["headline"], r["summary"] = _full_stack(r["headline"]), _full_stack(r["summary"])
+    hyphen = not re.search(r"full\s+stack", job_title, re.IGNORECASE)  # mirror the job's spelling
+    r["headline"], r["summary"] = _full_stack(r["headline"], hyphen), _full_stack(r["summary"], hyphen)
     for j in r["experience"]:
-        j["title"] = _full_stack(j["title"])
-        j["bullets"] = [_full_stack(b) for b in j["bullets"]]
+        j["title"] = _full_stack(j["title"], hyphen)
+        j["bullets"] = [_full_stack(b, hyphen) for b in j["bullets"]]
         j["dates"] = _date_range(j["dates"])
     for e in r["education"]:
         e["dates"] = _date_range(e["dates"])
     if before != (r["headline"], r["summary"], [j["title"] for j in r["experience"]]):
-        notes.append("Spelling: \"Full-Stack\" normalised.")
+        notes.append(f"Spelling: \"{'Full-Stack' if hyphen else 'Full Stack'}\" used everywhere, as in the job title.")
     return r, notes
 
 

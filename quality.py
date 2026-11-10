@@ -63,7 +63,8 @@ def date_issues(resume: dict) -> list[Issue]:
     return issues
 
 
-def duplicate_bullets(resume: dict, threshold: float = 0.8) -> list[Issue]:
+def duplicate_bullets(resume: dict, threshold: float = 0.75) -> list[Issue]:
+    """Bullets that repeat each other, e.g. a project bullet copying a job bullet (overlap of the shorter one)."""
     bullets = [b for j in resume["experience"] for b in j["bullets"]] + [b for p in resume["projects"]
                                                                          for b in p["bullets"]]
     toks = [evidence.tokens(b) for b in bullets]
@@ -71,7 +72,7 @@ def duplicate_bullets(resume: dict, threshold: float = 0.8) -> list[Issue]:
     for i in range(len(bullets)):
         for k in range(i + 1, len(bullets)):
             a, b = toks[i], toks[k]
-            if a and b and len(a & b) / len(a | b) >= threshold:
+            if min(len(a), len(b)) >= 4 and len(a & b) / min(len(a), len(b)) >= threshold:
                 issues.append(Issue(WARNING, "Duplicates", f"Two bullets say nearly the same thing: "
                                                            f"\"{bullets[i][:70]}…\""))
     return issues
