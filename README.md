@@ -11,7 +11,8 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 ## Features
 
 **Your profile, entered once**
-- 📄 Import your resume from **PDF, Word, JSON, Markdown or text**, check the extracted text and correct it. It becomes your master profile, the source of truth for every resume.
+- 📄 Import your resume from **PDF, Word, JSON, Markdown or text** (several files at once, e.g. your resume plus your LinkedIn PDF). It is **saved straight away** and becomes your master profile, the source of truth for every resume.
+- 🪄 **Build up your profile automatically**: Claude merges your resume, LinkedIn export, older resumes and notes into one organised profile. It keeps every real fact and number, invents nothing, and asks what's missing (e.g. user counts, which CI/CD tool). Numbers it added or dropped are flagged, and nothing is saved until you review it.
 - ✏️ Edit it any time, or **➕ add** a new role, project, certification or achievement under its section without retyping anything. Every change keeps the previous version in a **history** you can restore.
 - A job-specific resume **never changes your profile**.
 
@@ -59,7 +60,7 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 
 ## How it works
 
-1. **Profile**: upload your full resume once (PDF, DOCX, JSON, MD or TXT), check the extracted text, and it's remembered.
+1. **Profile**: upload your resume once (PDF, DOCX, JSON, MD or TXT; LinkedIn PDF too). It's saved at once; open 🪄 to let Claude organise it and answer its questions.
 2. **The job**: paste the job description and title, and pick the job type (Remote / Relocation / Local). Optionally set the length and must-include / must-exclude items.
 3. **🔍 Analyse the job**: see the requirements by importance, then answer Strong / Basic / Learning / No for the ones your profile doesn't show. Answers are remembered.
 4. **✨ Build**: Claude tailors the resume from your profile. The clean-up and quality gate run on the result, and auto-improve sends any serious issue back to Claude first.
@@ -150,7 +151,7 @@ Not in Strict mode (the default). Every skill and bullet is checked against your
 What remains is usually requirements your profile doesn't show (Strict mode keeps them out on purpose; the report lists them as gaps), or checks only real facts can fix, like too few bullets with numbers. Add real experience and numbers to your profile with ➕ Add, or answer Strong / Basic for skills you really have.
 
 **Where is my data stored?**
-In this app's folder only: `settings.json` and `data/` (profile, its history, skill answers and saved applications), all git-ignored. Set the `RESUME_TAILOR_HOME` environment variable to keep them somewhere else. Nothing is sent anywhere except the text sent to Claude. The app is meant to run locally for one person; it has no user accounts, so don't host it publicly.
+In this app's folder only: `settings.json` and `data/` (profile, its history, skill answers, saved applications and the job in progress, so a browser refresh or restart picks up where you left off), all git-ignored. Set the `RESUME_TAILOR_HOME` environment variable to keep them somewhere else. Nothing is sent anywhere except the text sent to Claude. The app is meant to run locally for one person; it has no user accounts, so don't host it publicly.
 
 **How do I run the tests?**
 `python -m unittest discover -s tests`. This runs the business-logic tests across 10 professions and the end-to-end app test with Claude mocked, all in a temporary folder.

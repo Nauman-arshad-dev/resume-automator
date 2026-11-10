@@ -39,6 +39,13 @@ def fake_run(config, system, content, schema=None):
     if schema is main.ANALYSIS_SCHEMA:
         CALLS.append("analysis")
         return analysis(SC), "mock"
+    if schema is main.PROFILE_SCHEMA:
+        CALLS.append("profile")
+        merged = "CONTACT\nJane Doe\n\n" + content.split("<current_profile>")[1].split("</current_profile>")[0]
+        return main.normalize({"profile": merged + "\n- Closed the books for 99 entities",
+                               "changes": ["Merged the LinkedIn export"],
+                               "questions": ["How many invoices a month did you process?"]},
+                              main.PROFILE_SCHEMA), "mock"
     if schema is main.RECRUITER_SCHEMA:
         CALLS.append("recruiter")
         return main.normalize({"first_impression": "Clear accountant profile", "fit": "promising",
@@ -133,6 +140,36 @@ class TestAppFlow(unittest.TestCase):
         self.button(at, "✏️ Open in the editor").click().run()
         self.assertEqual(at.session_state["view"], "✨ Tailor a resume")
         self.assertEqual(len(at.session_state["versions"]), len(saved["versions"]))
+        self.assertFalse(at.exception, at.exception)
+
+        # A browser refresh (a new session) restores the job and every version from data/workspace.json
+        again = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
+        again.run()
+        self.assertEqual(again.session_state["job_text"], JOB)
+        self.assertEqual(len(again.session_state["versions"]), len(saved["versions"]))
+        self.assertIn("Welcome back", self.text(again))
+        self.assertFalse(again.exception, again.exception)
+
+        # New job clears it, so the next refresh starts clean
+        self.button(again, "🆕 New job").click().run()
+        self.assertFalse(Path(self.tmp.name, "data", "workspace.json").exists())
+
+    def test_profile_builder(self):
+        at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
+        at.run()
+        at.text_area(key="paste_master").input(master_text(SC)).run()
+        profile_file = Path(self.tmp.name, "data", "master_resume.txt")
+        self.assertEqual(profile_file.read_text(encoding="utf-8"), master_text(SC), "saved without analysing")
+        self.assertIn("Using your saved profile", self.text(at))
+
+        self.button(at, "🪄 Organise and merge with Claude").click().run()
+        self.assertIn("profile", CALLS)
+        self.assertIn("not in your files or notes", self.text(at), "a number Claude added must be flagged")
+        self.assertIn("How many invoices", self.text(at))
+        self.assertEqual(profile_file.read_text(encoding="utf-8"), master_text(SC), "nothing saved before review")
+        self.button(at, "💾 Save this profile").click().run()
+        self.assertTrue(profile_file.read_text(encoding="utf-8").startswith("CONTACT\nJane Doe"))
+        self.assertTrue(store.profile_history(Path(self.tmp.name, "data")), "the old profile is kept")
         self.assertFalse(at.exception, at.exception)
 
 

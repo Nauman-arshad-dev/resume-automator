@@ -279,5 +279,38 @@ class TestStore(unittest.TestCase):
         self.assertTrue(added.rstrip().endswith("CERTIFICATIONS\nCPA, 2023"))
 
 
+    def test_workspace_roundtrip(self):
+        from datetime import date
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(store.load_workspace(Path(tmp)), {})
+            store.save_workspace(Path(tmp), {"job_text": "Job", "versions": [{"score": 90}], "app_date": date.today()})
+            self.assertEqual(store.load_workspace(Path(tmp)), {"job_text": "Job", "versions": [{"score": 90}]},
+                             "values that aren't JSON are skipped, never crash the save")
+            store.clear_workspace(Path(tmp))
+            self.assertEqual(store.load_workspace(Path(tmp)), {})
+
+
+class TestProfileBuilder(unittest.TestCase):
+    def test_request_and_parse(self):
+        system, content = main.profile_request("OLD PROFILE", [("linkedin.pdf", "LinkedIn text"), ("x.txt", " ")],
+                                               "I lead 2 developers")
+        self.assertIn("Never invent", system)
+        self.assertIn('<source name="linkedin.pdf">', content)
+        self.assertNotIn('name="x.txt"', content, "empty sources are left out")
+        self.assertIn("I lead 2 developers", content)
+        self.assertIn("OLD PROFILE", content)
+        with self.assertRaises(main.TailorError):
+            main.parse_profile('{"profile": "too short"}')
+        self.assertEqual(main.clean_profile("CONTACT\nALEX MORGAN\nalex@x.com\n"), "CONTACT\nALEX MORGAN\nalex@x.com\n",
+                         "a capitalised name is not a heading")
+        messy = ("CONTACT\nAlex\n\nSUMMARY\n(none provided in inputs)\n\nEXPERIENCE\nEngineer · Acme · 2020 – Present\n"
+                 "- Built 3 APIs\nTools: (none listed)\n\nPROJECTS\n(none listed)\n\nAWARDS\n\nLANGUAGES\nEnglish\n")
+        self.assertEqual(main.clean_profile(messy), "CONTACT\nAlex\n\nEXPERIENCE\nEngineer · Acme · 2020 – Present\n"
+                                                    "- Built 3 APIs\n\nLANGUAGES\nEnglish\n")
+        parsed = main.parse_profile('{"profile": "' + "word " * 50 + '", "questions": ["Q?"]}')
+        self.assertEqual(parsed["questions"], ["Q?"])
+        self.assertEqual(parsed["changes"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

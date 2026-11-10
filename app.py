@@ -14,6 +14,7 @@ copy-paste with claude.ai. Every resume is built from the master profile, which 
 job-specific resume never changes.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -70,6 +71,10 @@ JOB_KEYS = {"versions", "job_keywords", "analysis", "analysis_for", "cover_lette
             "job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
             "analysis_reply", "tailor_reply", "cover_reply", "auto_build", "recruiter", "recruiter_reply",
             "application_id", "app_company", "app_status", "app_notes", "app_date", "page_option"}
+# Kept in data/workspace.json so a browser refresh or app restart keeps the job in progress.
+WORKSPACE_KEYS = {"job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
+                  "page_option", "analysis", "analysis_for", "versions", "job_keywords", "cover_letter",
+                  "recruiter", "filename", "application_id", "app_company", "app_status", "app_notes"}
 JOB_KEY_PREFIXES = ("confirm_", "ext_report_", "revision_reply_", "edit_", "cover_edit_", "kw_", "gate_ack_")
 # Shown in the Improve tab; the built-in check and Claude's rules enforce each point.
 TIPS = """**Make it readable by software first.** A person only sees your resume if the software parsed it.
@@ -118,6 +123,11 @@ def save_master(text: str) -> None:
     if old and old != text:
         store.backup_profile(DATA_DIR, old)
     MASTER_FILE.write_text(text, encoding="utf-8")
+
+
+def job_fingerprint(master: str, job_text: str, job_title: str) -> str:
+    """Stable across app restarts (unlike hash()), so a restored analysis still matches its job."""
+    return hashlib.sha256("|".join((master, job_text, job_title)).encode("utf-8")).hexdigest()[:20]
 
 
 def save_confirmations(confirmations: dict) -> None:
@@ -204,6 +214,7 @@ def new_job() -> None:
     for key in list(st.session_state):
         if key in JOB_KEYS or key.startswith(JOB_KEY_PREFIXES):
             del st.session_state[key]
+    store.clear_workspace(DATA_DIR)
     st.session_state["notice_top"] = "Ready for a new job. Your resume and skill answers are kept."
 
 
@@ -211,7 +222,9 @@ def reset_everything() -> None:
     """Forget everything: resume, job, answers, results, job settings. Claude connection settings and
     saved applications stay."""
     st.session_state.clear()
+    st.session_state["workspace_restored"] = True  # nothing to restore: the workspace is deleted below
     st.cache_data.clear()
+    store.clear_workspace(DATA_DIR)
     MASTER_FILE.unlink(missing_ok=True)
     CONFIRM_FILE.unlink(missing_ok=True)
     for old in store.profile_history(DATA_DIR):
@@ -421,7 +434,8 @@ def open_application(app: dict) -> None:
         st.session_state["template"] = look_saved["template"]
     if app.get("analysis"):  # valid only while the profile is the one the application was built from
         st.session_state["analysis"] = app["analysis"]
-        st.session_state["analysis_for"] = hash((load_master(), app.get("job_text", ""), app.get("job_title", "")))
+        st.session_state["analysis_for"] = job_fingerprint(load_master(), app.get("job_text", ""),
+                                                           app.get("job_title", ""))
     if app.get("recruiter"):
         st.session_state["recruiter"] = {"version": len(app.get("versions") or []), "review": app["recruiter"]}
     if app.get("cover_letter"):
@@ -557,6 +571,30 @@ with st.sidebar:
         CONFIRM_FILE.unlink(missing_ok=True)
 
 saved_answers = _read_json(CONFIRM_FILE) if remember else {}
+
+
+def persist() -> None:
+    """Save the job in progress (job, analysis, every version, reports) for the next visit."""
+    if not remember:
+        return
+    state = {k: v for k, v in st.session_state.items() if k in WORKSPACE_KEYS}
+    try:
+        if state.get("job_text") or state.get("versions"):
+            store.save_workspace(DATA_DIR, state)
+        else:
+            store.clear_workspace(DATA_DIR)
+    except OSError:
+        pass
+
+
+if not st.session_state.get("workspace_restored"):  # first run of this browser session
+    st.session_state["workspace_restored"] = True
+    restored = {k: v for k, v in store.load_workspace(DATA_DIR).items() if k in WORKSPACE_KEYS} if remember else {}
+    if restored.get("job_text"):
+        for key, value in restored.items():
+            st.session_state.setdefault(key, value)
+        st.session_state.setdefault("notice_top", "Welcome back: your last job and its resume versions are restored. "
+                                                  "Click 🆕 New job to start another.")
 if view == VIEW_APPS:
     applications_page()
     st.stop()
@@ -580,6 +618,110 @@ st.caption("Built fresh from your master profile for each job, for any professio
 if notice := st.session_state.pop("notice_top", None):
     st.info(notice)
 
+UPLOAD_TYPES = ["pdf", "docx", "json", "md", "txt"]
+NUMBER = re.compile(r"\d[\d,.]*\d%?|\d%?")
+
+
+def upload_round() -> int:
+    """Changing an uploader's key is the only way to clear it after use."""
+    return st.session_state.get("upload_round", 0)
+
+
+def read_sources(files) -> list[tuple[str, str]]:
+    sources = []
+    for f in files or []:
+        try:
+            sources.append((f.name, main.read_upload(f.name, f.getvalue())))
+        except main.TailorError as e:
+            st.error(f"Could not read {f.name}: {e}")
+    return sources
+
+
+def profile_checks(draft: str, inputs: str) -> list[str]:
+    """Numbers Claude added or dropped while merging: the profile must stay exactly as true as its sources."""
+    have, got = set(NUMBER.findall(inputs)), set(NUMBER.findall(draft))
+    notes = []
+    if added := sorted(got - have):
+        notes.append("⚠️ Numbers that are **not in your files or notes**: " + ", ".join(added)
+                     + ". Remove them unless they are true.")
+    if dropped := sorted(have - got):
+        notes.append("Numbers from your files that the merged profile no longer has: " + ", ".join(dropped[:15])
+                     + ". Add them back if they matter.")
+    if len(draft.split()) < 0.6 * len(inputs.split()):
+        notes.append("The merged profile is much shorter than what you gave Claude; check nothing important "
+                     "was left out.")
+    return notes
+
+
+def merge_profile(current: str, sources: list[tuple[str, str]], notes: str) -> None:
+    """Ask Claude to merge everything into one profile; the result is a draft until the candidate saves it."""
+    system, content = main.profile_request(current, sources, notes)
+    inputs = "\n".join([current, notes] + [t for _, t in sources])
+    if engine == ENGINE_MANUAL:
+        reply = manual_step(main.manual_prompt(system, content, main.PROFILE_SCHEMA), "profile_reply",
+                            "🪄 Read the merged profile")
+        if reply is None:
+            return
+        try:
+            draft = main.parse_profile(reply)
+        except main.TailorError as e:
+            st.error(str(e))
+            return
+    else:
+        out = run_claude("🪄 Claude is merging everything into one profile…", system, content, main.PROFILE_SCHEMA)
+        if not out:
+            return
+        draft = main.normalize(out[0], main.PROFILE_SCHEMA)
+        draft["profile"] = main.clean_profile(draft["profile"])
+    draft["checks"] = profile_checks(draft["profile"], inputs)
+    st.session_state["profile_draft"] = draft
+    st.session_state["upload_round"] = upload_round() + 1
+    st.rerun()
+
+
+def profile_builder(current: str) -> None:
+    """🪄 Organise the profile and merge more files or notes into it with Claude, with a preview before saving."""
+    draft = st.session_state.get("profile_draft")
+    fresh = st.session_state.pop("profile_fresh", False)
+    with st.expander("🪄 Build up your profile automatically", expanded=bool(draft) or fresh):
+        if draft:
+            st.markdown("**Claude's merged profile.** Check it, then save. Nothing changes until you do.")
+            for line in draft.get("checks", []):
+                st.markdown(line)
+            for line in draft["changes"]:
+                st.caption("• " + line)
+            text = st.text_area("Merged profile", draft["profile"], height=320,
+                                key=f"draft_{hashlib.sha256(draft['profile'].encode()).hexdigest()[:12]}")
+            save_col, discard_col = st.columns(2)
+            if save_col.button("💾 Save this profile", type="primary", width="stretch"):
+                save_master(text.strip())
+                st.session_state.pop("profile_draft", None)
+                st.session_state["notice_top"] = "Profile saved. The previous version is kept in its history."
+                st.rerun()
+            if discard_col.button("Discard", width="stretch"):
+                st.session_state.pop("profile_draft", None)
+                st.rerun()
+            if draft["questions"]:
+                st.markdown("**Answer what you can to make your profile stronger** (skip any you don't know):")
+                st.markdown("\n".join(f"- {q}" for q in draft["questions"]))
+                answers = st.text_area("Your answers", height=110, key=f"draft_answers_{upload_round()}",
+                                       placeholder="e.g. Tracio: about 300 paying users. CI/CD: GitHub Actions.")
+                if answers.strip() and (engine == ENGINE_MANUAL or st.button("🪄 Add my answers")):
+                    merge_profile(text, [], answers)
+            return
+        st.caption("Add more sources (your LinkedIn profile saved as PDF, older resumes, project write-ups) and any "
+                   "new facts. Claude merges them into one organised profile, keeps every real fact and number, "
+                   "invents nothing and asks about what's missing. You check the result before it's saved.")
+        files = st.file_uploader("More sources (optional)", type=UPLOAD_TYPES, accept_multiple_files=True,
+                                 key=f"more_sources_{upload_round()}")
+        notes = st.text_area("New facts or notes (optional)", height=90, key=f"profile_notes_{upload_round()}",
+                             placeholder="e.g. Since March 2025 I lead 2 developers at Tracio. CI/CD: GitHub "
+                                         "Actions. Tracio handles subscription billing through Stripe.")
+        if engine == ENGINE_MANUAL or st.button("🪄 Organise and merge with Claude", type="primary",
+                                                 disabled=engine == ENGINE_CODE and not cli_path, width="stretch"):
+            merge_profile(current, read_sources(files), notes)
+
+
 # --------------------------------------------------------------------------- #
 # 1-2. Resume and job
 # --------------------------------------------------------------------------- #
@@ -589,8 +731,9 @@ with col_resume:
     saved_master = load_master() if remember else ""
     master = ""
     if saved_master and not st.session_state.get("replace_master"):
-        st.success(f"Using your saved profile ({len(saved_master.split())} words). It is the source of truth "
-                   "for every resume and is never changed by tailoring.")
+        st.success(f"Using your saved profile ({len(saved_master.split())} words), stored on this laptop. It is "
+                   "the source of truth for every resume and is never changed by tailoring.")
+        profile_builder(saved_master)
         with st.expander("✏️ View, correct or add to your profile"):
             edited_master = st.text_area("Profile text", saved_master, height=260, key=f"profile_{hash(saved_master)}",
                                          help="Everything you have done: all roles, dates, projects, skills, "
@@ -622,20 +765,21 @@ with col_resume:
             st.rerun()
         master = saved_master
     else:
-        uploaded = st.file_uploader("Upload your full resume (all roles, projects, skills)",
-                                    type=["pdf", "docx", "json", "md", "txt"], key="upload_master",
-                                    help="Text-based PDF or Word file, up to 5 MB. Scans can't be read.")
-        if uploaded is not None:
-            try:
-                extracted = main.read_upload(uploaded.name, uploaded.getvalue())
-            except main.TailorError as e:
-                st.error(f"Could not read the resume file: {e}")
-            else:
-                st.caption("Check the extracted text and correct anything that was read wrongly:")
-                master = st.text_area("Extracted profile", extracted, height=200,
-                                      key=f"extracted_{hash(extracted)}").strip()
-        else:
-            master = st.text_area("…or paste it", height=110, key="paste_master").strip()
+        st.caption("Do this once: your profile is saved on this laptop and reused for every job.")
+        uploaded = st.file_uploader("Upload your resume (add your LinkedIn PDF or older resumes too)",
+                                    type=UPLOAD_TYPES, accept_multiple_files=True,
+                                    key=f"upload_master_{upload_round()}",
+                                    help="Text-based PDF or Word files, up to 5 MB each. Scans can't be read.")
+        pasted = st.text_area("…or paste it", height=110, key="paste_master").strip()
+        sources = read_sources(uploaded)
+        master = "\n\n".join([text for _, text in sources] + ([pasted] if pasted else [])).strip()
+        if master and remember:  # saved straight away, so a refresh never loses it
+            save_master(master)
+            st.session_state.pop("paste_master", None)
+            st.session_state.update(replace_master=False, profile_fresh=True, upload_round=upload_round() + 1)
+            st.session_state["notice_top"] = ("Profile saved on this laptop: it stays after a refresh. Open "
+                                              "🪄 to let Claude organise it and merge in more sources.")
+            st.rerun()
     if saved_answers:
         st.caption(f"🧠 {len(saved_answers)} skill answers remembered from earlier jobs.")
 
@@ -680,7 +824,7 @@ def remember_master() -> None:
 # --------------------------------------------------------------------------- #
 st.divider()
 st.subheader("3 · Skills the job asks for")
-fingerprint = hash((master, job_text, job_title))
+fingerprint = job_fingerprint(master, job_text, job_title)
 analysis = st.session_state.get("analysis") if st.session_state.get("analysis_for") == fingerprint else None
 claude_ready = engine != ENGINE_CODE or bool(cli_path)
 
@@ -840,6 +984,7 @@ if analysis:
         if clicked or (auto_build and can_build and not unanswered):  # new skills: let them be seen first
             build_resume(ctx)
 
+persist()
 if not versions():
     st.stop()
 
@@ -1294,3 +1439,5 @@ with tab_save:
             st.error(f"Could not save the application: {e}")
         else:
             st.success("Saved. Open it any time under 💼 My applications.")
+
+persist()

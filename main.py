@@ -54,7 +54,7 @@ API_TIMEOUT_SECONDS = 600
 
 from prompts import (  # noqa: E402,F401 — prompts and schemas live in prompts.py; re-exported here
     ANALYSIS_PROMPT, ANALYSIS_SCHEMA, CONTENT_MODES, COVER_LETTER_PROMPT, COVER_LETTER_SCHEMA,
-    RECRUITER_PROMPT, RECRUITER_SCHEMA, REQUIREMENT_CATEGORIES, RESPONSE_SCHEMA, RESUME_SCHEMA,
+    PROFILE_PROMPT, PROFILE_SCHEMA, RECRUITER_PROMPT, RECRUITER_SCHEMA, REQUIREMENT_CATEGORIES, RESPONSE_SCHEMA, RESUME_SCHEMA,
     REVISION_PROMPT, SENIORITY_LEVELS, TAILOR_PROMPT, revision_prompt, tailor_prompt,
 )
 
@@ -217,6 +217,49 @@ def parse_recruiter(text: str) -> dict:
     result = normalize(_reply_json(text), RECRUITER_SCHEMA)
     if not result["first_impression"] and not result["improvements"]:
         raise TailorError("The pasted JSON doesn't contain a recruiter review. Paste Claude's whole reply.")
+    return result
+
+
+def profile_request(current: str, sources: list[tuple[str, str]], notes: str = "") -> tuple[str, str]:
+    """(system prompt, user content) to merge resumes, a LinkedIn export and notes into one master profile —
+    use with PROFILE_SCHEMA. sources: (file name, extracted text)."""
+    blocks = "".join(f"<source name=\"{name}\">\n{text}\n</source>\n\n" for name, text in sources if text.strip())
+    content = (
+        f"<current_profile>\n{current.strip() or '(empty)'}\n</current_profile>\n\n"
+        f"<sources>\n{blocks or '(none)'}</sources>\n\n"
+        f"<notes>\n{notes.strip() or '(none)'}\n</notes>\n\n"
+        "Merge these into one complete master profile following the instructions."
+    )
+    return PROFILE_PROMPT, content
+
+
+_PLACEHOLDER = re.compile(r"^\s*[-•]?\s*\(?\s*(none|n/?a|not (provided|listed|given|stated)|nothing)\b[^)]*\)?\s*\.?\s*$"
+                          r"|^\s*tools:\s*\(?\s*(none|n/?a)\b[^)]*\)?\s*$", re.IGNORECASE)
+
+
+_PROFILE_HEADINGS = {"CONTACT", "HEADLINE", "SUMMARY", "SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION", "CERTIFICATIONS",
+                     "AWARDS", "LANGUAGES", "OTHER", "ACHIEVEMENTS", "PUBLICATIONS", "VOLUNTEERING", "END"}
+
+
+def clean_profile(text: str) -> str:
+    """Drop placeholder lines ("(none listed)") and headings left with nothing under them."""
+    lines = [ln.rstrip() for ln in text.strip().splitlines() if not _PLACEHOLDER.match(ln)]
+    heading = lambda ln: ln.strip().rstrip(":").upper() in _PROFILE_HEADINGS and ln.strip().isupper()  # noqa: E731
+
+    def empty_section(i: int) -> bool:
+        rest = (ln for ln in lines[i + 1:] if ln.strip())
+        return heading(lines[i]) and heading(next(rest, "END"))
+
+    kept = [ln for i, ln in enumerate(lines) if not empty_section(i)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip() + "\n"
+
+
+def parse_profile(text: str) -> dict:
+    """Read a pasted profile reply (copy-paste mode)."""
+    result = normalize(_reply_json(text), PROFILE_SCHEMA)
+    if len(result["profile"].split()) < 40:
+        raise TailorError("The pasted JSON doesn't contain a profile. Paste Claude's whole reply.")
+    result["profile"] = clean_profile(result["profile"])
     return result
 
 

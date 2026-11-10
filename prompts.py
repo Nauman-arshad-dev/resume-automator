@@ -130,6 +130,12 @@ COVER_LETTER_SCHEMA = _obj({
     "closing": _STR,      # e.g. "Kind regards,"
 })
 
+PROFILE_SCHEMA = _obj({
+    "profile": _STR,      # the complete merged master profile, plain text with standard section headings
+    "changes": _STR_LIST,  # what was merged, reorganised or removed as duplicate
+    "questions": _STR_LIST,  # missing facts only the candidate can supply (numbers, dates, tools per role)
+})
+
 # --------------------------------------------------------------------------- #
 # Prompts
 # --------------------------------------------------------------------------- #
@@ -281,6 +287,23 @@ Return:
 - interview_questions: 5-8 questions this resume would prompt.
 - language_issues: spelling, grammar, tense or consistency problems, quoting the text. [] if none.
 - hiring_manager_view: 2-4 sentences from the hiring manager's perspective."""
+
+PROFILE_PROMPT = """You build a candidate's MASTER PROFILE: the single complete record of their career that every tailored resume is later written from. It is a private working document, not a resume, so completeness matters more than length.
+
+You receive the CURRENT_PROFILE (may be empty), one or more SOURCES (old resumes, a LinkedIn PDF export, project notes, portfolio text) and the candidate's own NOTES. Merge them into one profile.
+
+Rules:
+- Facts only from the inputs. Never invent employers, titles, dates, numbers, tools, clients or achievements, and never upgrade a claim (e.g. "used" to "led"). Keep the candidate's own wording for achievements; fix only obvious typos.
+- Keep EVERYTHING relevant: every role, project, tool, result and number from any input, even if it seems minor. Drop only exact duplicates; when two inputs describe the same role, merge their bullets into that role.
+- If inputs conflict (different dates or titles for the same role), keep the CURRENT_PROFILE or NOTES version and mention the conflict in changes.
+- The candidate's NOTES are the newest facts: add them under the role or section they name. If a note doesn't say which role it belongs to, put it under OTHER and ask in questions; never guess, and never list the same fact twice.
+- Plain text with these headings, in this order: CONTACT, HEADLINE, SUMMARY, SKILLS, EXPERIENCE, PROJECTS, EDUCATION, CERTIFICATIONS, AWARDS, LANGUAGES, OTHER. Leave out any heading or "Tools:" line with nothing under it; never write placeholders such as "(none)" or "not provided". Put each fact in one place: certifications only under CERTIFICATIONS, not in SKILLS.
+  - CONTACT: name, email, phone, location, links, one per line.
+  - SKILLS: grouped lines, e.g. "Languages: TypeScript, Python".
+  - EXPERIENCE: per role "Title · Company · Location · Mon YYYY – Mon YYYY" (or Present), then "- " bullets. Under each role add "Tools: …" listing the tools that role used, taken only from the inputs. Newest first.
+  - PROJECTS: "Name · role/context · dates (if known)", then "- " bullets and "Tools: …".
+- changes: 2-8 short lines on what you merged, reorganised or found conflicting.
+- questions: up to 8 specific questions about facts that would make the profile stronger and that only the candidate knows, e.g. "Tracio: how many users or customers?", "Which CI/CD tool did you use at Acme?", "Start month for the Freelance role?". Never ask for things already in the inputs. [] if nothing important is missing."""
 
 COVER_LETTER_PROMPT = """You are an expert career writer. Write a cover letter for the job, based on the candidate's tailored resume.
 

@@ -4,6 +4,7 @@ Local storage for job applications and master-profile history (all git-ignored, 
     data/applications/<id>/application.json   job, profile snapshot, versions, reports, status, notes
     data/applications/<id>/resume.pdf|.docx   the exact files of the saved version
     data/profile_history/<timestamp>.txt      earlier versions of the master profile (last 20)
+    data/workspace.json                        the job in progress, restored after a browser refresh
 
 A saved application never changes the master profile, and saving the profile never
 changes an application: each application keeps its own copy of what was used.
@@ -142,3 +143,42 @@ def add_to_profile(text: str, section: str, entry: str) -> str:
     while end > idx + 1 and not lines[end - 1].strip():
         end -= 1
     return "\n".join(lines[:end] + [entry] + lines[end:]) + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# Workspace: the job in progress, so a browser refresh or app restart loses nothing
+# --------------------------------------------------------------------------- #
+
+WORKSPACE = "workspace.json"
+
+
+def save_workspace(base: Path, state: dict) -> None:
+    """Write the job in progress (JSON-safe values only); skips the write when nothing changed."""
+    path = Path(base) / WORKSPACE
+    clean = {k: v for k, v in state.items() if _json_safe(v)}
+    text = json.dumps(clean, ensure_ascii=False, sort_keys=True, default=str)
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def load_workspace(base: Path) -> dict:
+    path = Path(base) / WORKSPACE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def clear_workspace(base: Path) -> None:
+    (Path(base) / WORKSPACE).unlink(missing_ok=True)
+
+
+def _json_safe(value) -> bool:
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
