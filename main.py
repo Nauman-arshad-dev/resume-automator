@@ -220,6 +220,15 @@ def parse_recruiter(text: str) -> dict:
     return result
 
 
+def answers_note(answers: list[tuple[str, str]]) -> str:
+    """Job-specific question/answer pairs as notes for profile_request."""
+    pairs = [(q.strip(), a.strip()) for q, a in answers if a.strip()]
+    if not pairs:
+        return ""
+    return ("My answers to questions about my experience (place each fact under the role or project the "
+            "question names):\n" + "\n".join(f"Q: {q}\nA: {a}" for q, a in pairs))
+
+
 def profile_request(current: str, sources: list[tuple[str, str]], notes: str = "") -> tuple[str, str]:
     """(system prompt, user content) to merge resumes, a LinkedIn export and notes into one master profile —
     use with PROFILE_SCHEMA. sources: (file name, extracted text)."""

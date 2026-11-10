@@ -32,15 +32,18 @@ SC = SCENARIOS[5]  # accountant: proves nothing is software-specific
 JOB = ("Accountant at Acme Ltd. Required: Xero, month-end close, accounts payable, VAT returns. "
        "Nice to have: SAP, IFRS 16. Hybrid, London.")
 CALLS: list[str] = []
+QUESTIONS: list[dict] = []  # job-specific profile questions the mocked analysis returns
+SENT: dict[str, str] = {}   # the last request content per call type
 
 
 def fake_run(config, system, content, schema=None):
     schema = schema or main.RESPONSE_SCHEMA
     if schema is main.ANALYSIS_SCHEMA:
         CALLS.append("analysis")
-        return analysis(SC), "mock"
+        return {**analysis(SC), "profile_questions": list(QUESTIONS)}, "mock"
     if schema is main.PROFILE_SCHEMA:
         CALLS.append("profile")
+        SENT["profile"] = content
         merged = "CONTACT\nJane Doe\n\n" + content.split("<current_profile>")[1].split("</current_profile>")[0]
         return main.normalize({"profile": merged + "\n- Closed the books for 99 entities",
                                "changes": ["Merged the LinkedIn export"],
@@ -69,6 +72,7 @@ class TestAppFlow(unittest.TestCase):
         self._run, self._find = engines.run, engines.find_claude_cli
         engines.run, engines.find_claude_cli = fake_run, (lambda: "claude-mock")
         CALLS.clear()
+        QUESTIONS.clear()
 
     def tearDown(self):
         engines.run, engines.find_claude_cli = self._run, self._find
@@ -92,7 +96,7 @@ class TestAppFlow(unittest.TestCase):
         at.run()
         self.button(at, "🔍 Analyse the job").click().run()
         self.assertIn("analysis", CALLS)
-        self.assertIn("Needs your confirmation", self.text(at))
+        self.assertIn("2 to answer", self.text(at))
         self.button(at, "✨ Build my resume").click().run()
         self.assertIn("tailor", CALLS)
         self.assertIn("revision", CALLS, "serious gate issues must be sent to Claude in auto-improve")
@@ -154,6 +158,33 @@ class TestAppFlow(unittest.TestCase):
         self.button(again, "🆕 New job").click().run()
         self.assertFalse(Path(self.tmp.name, "data", "workspace.json").exists())
 
+    def test_job_questions_update_profile(self):
+        QUESTIONS.append({"question": "Acme: how many entities did you close each month?",
+                          "requirement": "month-end close", "example": "3 entities in 5 days"})
+        at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
+        at.run()
+        at.text_area(key="paste_master").input(master_text(SC)).run()
+        at.text_area(key="job_text").input(JOB)
+        at.radio(key="job_type").set_value("Local / Onsite")
+        at.run()
+        self.button(at, "🔍 Analyse the job").click().run()
+        self.assertNotIn("tailor", CALLS, "with questions to answer, the build waits for the candidate")
+        self.assertIn("Acme: how many entities", " ".join(t.label for t in at.text_input))
+        at.text_input(key="pq_0").input("4 entities, closed in 6 working days").run()
+        self.button(at, "➕ Add 1 answer").click().run()
+        self.assertIn("4 entities, closed in 6 working days", SENT["profile"])
+        self.assertIn("not in your files or answers", self.text(at))
+        profile_file = Path(self.tmp.name, "data", "master_resume.txt")
+        self.assertEqual(profile_file.read_text(encoding="utf-8"), master_text(SC), "nothing saved before review")
+        self.button(at, "💾 Save to my profile").click().run()
+        self.assertIn("Jane Doe", profile_file.read_text(encoding="utf-8"))
+        self.assertIn("Your answers are in your profile", self.text(at))
+        self.assertTrue(at.session_state["analysis"], "the analysis survives the profile update")
+        self.button(at, "✨ Build my resume").click().run()
+        self.assertIn("tailor", CALLS)
+        self.assertIn("6 · Review and download", " ".join(e.value for e in at.subheader))
+        self.assertFalse(at.exception, at.exception)
+
     def test_profile_builder(self):
         at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=240)
         at.run()
@@ -164,7 +195,7 @@ class TestAppFlow(unittest.TestCase):
 
         self.button(at, "🪄 Organise and merge with Claude").click().run()
         self.assertIn("profile", CALLS)
-        self.assertIn("not in your files or notes", self.text(at), "a number Claude added must be flagged")
+        self.assertIn("not in your files or answers", self.text(at), "a number Claude added must be flagged")
         self.assertIn("How many invoices", self.text(at))
         self.assertEqual(profile_file.read_text(encoding="utf-8"), master_text(SC), "nothing saved before review")
         self.button(at, "💾 Save this profile").click().run()

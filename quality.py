@@ -147,7 +147,7 @@ def gate(resume: dict, master: str, confirmations: dict | None, analysis: dict |
         if unbacked:
             issues.append(Issue(SERIOUS if strict else WARNING, "Evidence",
                                 "Skills not shown in your profile and not confirmed: " + ", ".join(unbacked)
-                                + (". Remove them or confirm them in step 3." if strict
+                                + (". Remove them or confirm them in step 4." if strict
                                    else ". Flexible mode lists them; be ready to discuss each one.")))
         for row in evidence.trace_bullets(resume, master, job_skills, confirmations):
             if row["unsupported_terms"]:

@@ -70,12 +70,13 @@ LEVEL_HELP = {  # Strict: Strong/Basic are included, Learning/No stay out. Flexi
 JOB_KEYS = {"versions", "job_keywords", "analysis", "analysis_for", "cover_letter", "filename", "notice",
             "job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
             "analysis_reply", "tailor_reply", "cover_reply", "auto_build", "recruiter", "recruiter_reply",
-            "application_id", "app_company", "app_status", "app_notes", "app_date", "page_option"}
+            "application_id", "app_company", "app_status", "app_notes", "app_date", "page_option",
+            "job_draft", "job_details_saved"}
 # Kept in data/workspace.json so a browser refresh or app restart keeps the job in progress.
 WORKSPACE_KEYS = {"job_text", "job_title", "job_type", "location", "visa", "must_include", "must_exclude",
                   "page_option", "analysis", "analysis_for", "versions", "job_keywords", "cover_letter",
                   "recruiter", "filename", "application_id", "app_company", "app_status", "app_notes"}
-JOB_KEY_PREFIXES = ("confirm_", "ext_report_", "revision_reply_", "edit_", "cover_edit_", "kw_", "gate_ack_")
+JOB_KEY_PREFIXES = ("pq_", "confirm_", "ext_report_", "revision_reply_", "edit_", "cover_edit_", "kw_", "gate_ack_")
 # Shown in the Improve tab; the built-in check and Claude's rules enforce each point.
 TIPS = """**Make it readable by software first.** A person only sees your resume if the software parsed it.
 - One column, standard headings: Summary, Skills, Experience, Projects, Education.
@@ -600,23 +601,46 @@ if view == VIEW_APPS:
     st.stop()
 
 # --------------------------------------------------------------------------- #
-# Header: new job / reset
+# Header: new job / reset, and the step tracker
 # --------------------------------------------------------------------------- #
 title_col, new_col, reset_col = st.columns([4, 1, 1], vertical_alignment="bottom")
 title_col.title("📄 Resume Tailor")
 new_col.button("🆕 New job", on_click=new_job, width="stretch",
-               help="Start the next application. Keeps your master resume and skill answers.")
+               help="Start the next application. Keeps your profile and skill answers.")
 with reset_col.popover("♻️ Reset", width="stretch"):
     st.markdown("Forget **everything**: master resume, its history, job, skill answers and results. "
                 "Saved applications are kept (delete them under 💼 My applications).")
     st.button("Yes, reset everything", on_click=reset_everything, type="primary")
-st.caption("Built fresh from your master profile for each job, for any profession and level. "
-           + ("Strict mode: every claim is backed by your profile or your own confirmation; gaps are reported, "
-              "never invented." if content_mode == "Strict" else
-              "Flexible mode: every job keyword is listed and linked to your closest real experience, with no "
-              "invented employers, dates or numbers."))
+st.caption("Six steps from your profile to a ready-to-send PDF. "
+           + ("Strict mode: every claim comes from your profile or your own answers; nothing is invented."
+              if content_mode == "Strict" else
+              "Flexible mode: every job keyword is listed and linked to your closest real experience; no invented "
+              "employers, dates or numbers."))
+tracker = st.empty()  # filled once every step's state is known
 if notice := st.session_state.pop("notice_top", None):
     st.info(notice)
+
+STEPS = ("Profile", "Job", "Analyse", "Questions", "Build", "Download")
+
+
+def show_tracker(done: list[bool], hints: list[str]) -> None:
+    current = next((i for i, d in enumerate(done) if not d), None)
+    with tracker.container(border=True):
+        for i, (col, name) in enumerate(zip(st.columns(len(STEPS)), STEPS)):
+            icon = "✅" if done[i] else "👉" if i == current else "⚪"
+            col.markdown(f"{icon} **{i + 1} · {name}**" if i == current else f"{icon} {i + 1} · {name}")
+        st.caption("**Next:** " + (hints[current] if current is not None else
+                                    "All done. Find this application any time under 💼 My applications."))
+
+
+def step(number: int, title: str, caption: str = ""):
+    """One bordered box per step, so the process reads top to bottom."""
+    box = st.container(border=True)
+    box.subheader(f"{number} · {title}")
+    if caption:
+        box.caption(caption)
+    return box
+
 
 UPLOAD_TYPES = ["pdf", "docx", "json", "md", "txt"]
 NUMBER = re.compile(r"\d[\d,.]*\d%?|\d%?")
@@ -642,19 +666,19 @@ def profile_checks(draft: str, inputs: str) -> list[str]:
     have, got = set(NUMBER.findall(inputs)), set(NUMBER.findall(draft))
     notes = []
     if added := sorted(got - have):
-        notes.append("⚠️ Numbers that are **not in your files or notes**: " + ", ".join(added)
+        notes.append("⚠️ Numbers that are **not in your files or answers**: " + ", ".join(added)
                      + ". Remove them unless they are true.")
     if dropped := sorted(have - got):
-        notes.append("Numbers from your files that the merged profile no longer has: " + ", ".join(dropped[:15])
-                     + ". Add them back if they matter.")
+        notes.append("Numbers from your profile or answers that the new version no longer has: "
+                     + ", ".join(dropped[:15]) + ". Add them back if they matter.")
     if len(draft.split()) < 0.6 * len(inputs.split()):
-        notes.append("The merged profile is much shorter than what you gave Claude; check nothing important "
-                     "was left out.")
+        notes.append("The new profile is much shorter than before; check nothing important was left out.")
     return notes
 
 
-def merge_profile(current: str, sources: list[tuple[str, str]], notes: str) -> None:
-    """Ask Claude to merge everything into one profile; the result is a draft until the candidate saves it."""
+def merge_profile(current: str, sources: list[tuple[str, str]], notes: str, key: str = "profile_draft") -> None:
+    """Ask Claude to merge everything into one profile; the result is a draft (in session_state[key]) until the
+    candidate saves it."""
     system, content = main.profile_request(current, sources, notes)
     inputs = "\n".join([current, notes] + [t for _, t in sources])
     if engine == ENGINE_MANUAL:
@@ -668,13 +692,13 @@ def merge_profile(current: str, sources: list[tuple[str, str]], notes: str) -> N
             st.error(str(e))
             return
     else:
-        out = run_claude("🪄 Claude is merging everything into one profile…", system, content, main.PROFILE_SCHEMA)
+        out = run_claude("🪄 Claude is adding this to your profile…", system, content, main.PROFILE_SCHEMA)
         if not out:
             return
         draft = main.normalize(out[0], main.PROFILE_SCHEMA)
         draft["profile"] = main.clean_profile(draft["profile"])
     draft["checks"] = profile_checks(draft["profile"], inputs)
-    st.session_state["profile_draft"] = draft
+    st.session_state[key] = draft
     st.session_state["upload_round"] = upload_round() + 1
     st.rerun()
 
@@ -723,16 +747,14 @@ def profile_builder(current: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 1-2. Resume and job
+# Step 1. Profile
 # --------------------------------------------------------------------------- #
-col_resume, col_job = st.columns(2, gap="large")
-with col_resume:
-    st.subheader("1 · Your profile (master resume)")
+with step(1, "Your profile", "Everything you have done, entered once and saved on this laptop. Every resume is "
+                             "built only from it, and tailoring never changes it."):
     saved_master = load_master() if remember else ""
     master = ""
     if saved_master and not st.session_state.get("replace_master"):
-        st.success(f"Using your saved profile ({len(saved_master.split())} words), stored on this laptop. It is "
-                   "the source of truth for every resume and is never changed by tailoring.")
+        st.success(f"✅ Using your saved profile ({len(saved_master.split())} words).")
         profile_builder(saved_master)
         with st.expander("✏️ View, correct or add to your profile"):
             edited_master = st.text_area("Profile text", saved_master, height=260, key=f"profile_{hash(saved_master)}",
@@ -760,12 +782,11 @@ with col_resume:
                     save_master(pick.read_text(encoding="utf-8"))
                     st.session_state["notice_top"] = "Earlier profile version restored."
                     st.rerun()
-        if st.button("Use a different resume"):
-            st.session_state["replace_master"] = True
-            st.rerun()
+            if st.button("Use a different resume"):
+                st.session_state["replace_master"] = True
+                st.rerun()
         master = saved_master
     else:
-        st.caption("Do this once: your profile is saved on this laptop and reused for every job.")
         uploaded = st.file_uploader("Upload your resume (add your LinkedIn PDF or older resumes too)",
                                     type=UPLOAD_TYPES, accept_multiple_files=True,
                                     key=f"upload_master_{upload_round()}",
@@ -778,21 +799,22 @@ with col_resume:
             st.session_state.pop("paste_master", None)
             st.session_state.update(replace_master=False, profile_fresh=True, upload_round=upload_round() + 1)
             st.session_state["notice_top"] = ("Profile saved on this laptop: it stays after a refresh. Open "
-                                              "🪄 to let Claude organise it and merge in more sources.")
+                                              "🪄 in step 1 to let Claude organise it and merge in more sources.")
             st.rerun()
-    if saved_answers:
-        st.caption(f"🧠 {len(saved_answers)} skill answers remembered from earlier jobs.")
 
-with col_job:
-    st.subheader("2 · The job")
-    job_text = st.text_area("Job description", height=150, placeholder="Paste the full job posting",
+# --------------------------------------------------------------------------- #
+# Step 2. The job
+# --------------------------------------------------------------------------- #
+with step(2, "The job", "Paste the whole posting and say where you would work."):
+    job_text = st.text_area("Job description", height=170, placeholder="Paste the full job posting",
                             key="job_text").strip()
-    job_title = st.text_input("Exact job title", placeholder="Senior Backend Engineer (or leave empty: "
-                              "taken from the posting)", key="job_title",
-                              help="ATS checkers look for the exact title. Also names the file "
-                                   "Firstname-Lastname-Role.pdf.").strip()
-    job_type = st.radio("Job type", main.JOB_TYPES, index=None, horizontal=True, key="job_type",
-                        help="Sets the line under your contact details. Picked fresh for every job.")
+    title_box, type_box = st.columns(2)
+    job_title = title_box.text_input("Exact job title", placeholder="Leave empty: taken from the posting",
+                                     key="job_title",
+                                     help="ATS checkers look for the exact title. Also names the file "
+                                          "Firstname-Lastname-Role.pdf.").strip()
+    job_type = type_box.radio("Job type", main.JOB_TYPES, index=None, horizontal=True, key="job_type",
+                              help="Sets the line under your contact details. Picked fresh for every job.")
     if job_type == "Remote":
         st.session_state.setdefault("timezone", saved.get("timezone", ""))
         st.text_input("Your time zone", placeholder="UTC+5", key="timezone",
@@ -800,8 +822,8 @@ with col_job:
     elif job_type == "Relocation":
         loc_col, visa_col = st.columns(2)
         loc_col.text_input("Relocate to (city, country)", placeholder="Berlin, Germany", key="location")
-        visa_col.text_input("Visa (optional)", placeholder="auto: e.g. EU Blue Card", key="visa")
-    with st.expander("Length, must include / must exclude (optional)"):
+        visa_col.text_input("Visa (optional)", placeholder="Only one you really have", key="visa")
+    with st.expander("More options: length, must include, must exclude"):
         st.radio("Resume length", PAGE_OPTIONS, horizontal=True, key="page_option",
                  help="Auto: 1 page for entry-level and junior jobs, 2 pages otherwise.")
         st.text_input("Must include", placeholder="e.g. my open-source project, German B1", key="must_include")
@@ -820,10 +842,8 @@ def remember_master() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. Analyse the job and confirm skills
+# Step 3. Analyse the job
 # --------------------------------------------------------------------------- #
-st.divider()
-st.subheader("3 · Skills the job asks for")
 fingerprint = job_fingerprint(master, job_text, job_title)
 analysis = st.session_state.get("analysis") if st.session_state.get("analysis_for") == fingerprint else None
 claude_ready = engine != ENGINE_CODE or bool(cli_path)
@@ -832,98 +852,181 @@ claude_ready = engine != ENGINE_CODE or bool(cli_path)
 def store_analysis(result: dict) -> None:
     st.session_state["analysis"] = result
     st.session_state["analysis_for"] = fingerprint
-    st.session_state["auto_build"] = True  # build straight away if every skill is already answered
+    st.session_state["auto_build"] = True  # build straight away if there is nothing to ask
     remember_master()
 
 
-if not (master and job_text):
-    st.info("Add your master resume and the job description, then analyse the job.")
-elif engine == ENGINE_MANUAL and not analysis:
-    with st.expander("🔍 Analyse the job with claude.ai (copy-paste)", expanded=True):
-        reply = manual_step(main.manual_prompt(*main.analysis_request(master, job_text, job_title),
-                                               main.ANALYSIS_SCHEMA), "analysis_reply", "🔍 Read the analysis")
-        if reply is not None:
-            try:
-                store_analysis(main.parse_analysis(reply))
+with step(3, "Analyse the job", "Claude reads the job, ranks every requirement by importance and compares it "
+                                "with your profile."):
+    if not (master and job_text):
+        st.info("Finish steps 1 and 2 first.")
+    elif engine == ENGINE_MANUAL and not analysis:
+        with st.expander("🔍 Analyse the job with claude.ai (copy-paste)", expanded=True):
+            reply = manual_step(main.manual_prompt(*main.analysis_request(master, job_text, job_title),
+                                                   main.ANALYSIS_SCHEMA), "analysis_reply", "🔍 Read the analysis")
+            if reply is not None:
+                try:
+                    store_analysis(main.parse_analysis(reply))
+                    st.rerun()
+                except main.TailorError as e:
+                    st.error(str(e))
+    elif engine != ENGINE_MANUAL:
+        if st.button("🔁 Analyse again" if analysis else "🔍 Analyse the job", disabled=not claude_ready,
+                     type="secondary" if analysis else "primary", width="content" if analysis else "stretch"):
+            out = run_claude("🔍 Claude is reading the job and comparing it with your profile…",
+                             *main.analysis_request(master, job_text, job_title), main.ANALYSIS_SCHEMA)
+            if out:
+                store_analysis(out[0])
                 st.rerun()
-            except main.TailorError as e:
-                st.error(str(e))
-elif engine != ENGINE_MANUAL:
-    if st.button("🔁 Analyse again" if analysis else "🔍 Analyse the job", disabled=not claude_ready,
-                 type="secondary" if analysis else "primary", width="content" if analysis else "stretch"):
-        out = run_claude("🔍 Claude is reading the job and comparing it with your resume…",
-                         *main.analysis_request(master, job_text, job_title), main.ANALYSIS_SCHEMA)
-        if out:
-            store_analysis(out[0])
+
+    if analysis:
+        title = main.clean_title(job_title or analysis["job_title"])
+        info = [f"**{title}**"] + [x for x in (analysis["company"], analysis.get("industry"),
+                                               analysis["job_location"], analysis.get("employment_type"),
+                                               analysis.get("seniority_level")) if x]
+        st.markdown(" · ".join(info))
+        if analysis["seniority"]:
+            st.caption(analysis["seniority"])
+        skills = analysis["skills"]
+        strong = [s for s in skills if s["group"] == "A"]
+        if strong:
+            st.markdown(f"✅ **Your profile already shows {len(strong)} of {len(skills)} requirements:** "
+                        + " ".join(f":green-background[{s['skill']}]" for s in strong))
+        with st.expander(f"📊 All requirements by importance ({len(skills)})"):
+            rank = {"essential": 0, "domain": 1, "preferred": 2, "additional": 3}
+            st.dataframe([{"Requirement": s["skill"], "Category": match.CATEGORY_LABEL[match.category_of(s)],
+                           "Weight": "●" * max(1, min(5, s.get("weight") or 3)),
+                           "Your profile": {"A": "✅ shown", "B": f"🔁 equivalent: {s['evidence']}"}.get(
+                               s["group"], "❓ not shown")}
+                          for s in sorted(skills, key=lambda s: (rank[match.category_of(s)],
+                                                                 -(s.get("weight") or 3)))],
+                         hide_index=True, width="stretch")
+            extra_info = [("Soft skills", analysis.get("soft_skills")),
+                          ("Education", analysis.get("education_requirements")),
+                          ("Experience", analysis.get("experience_requirements")),
+                          ("Main responsibilities", analysis.get("responsibilities"))]
+            for label, values in extra_info:
+                if values:
+                    st.markdown(f"**{label}:** " + "; ".join(values))
+    else:
+        title = main.clean_title(job_title)
+
+
+# --------------------------------------------------------------------------- #
+# Step 4. Questions: skills to confirm, and details for this job
+# --------------------------------------------------------------------------- #
+def save_profile_for_job(text: str) -> None:
+    """Save answers into the profile without losing this job's analysis."""
+    save_master(text.strip())
+    st.session_state["analysis_for"] = job_fingerprint(text.strip(), job_text, job_title)
+    st.session_state["job_details_saved"] = True
+    st.session_state.pop("job_draft", None)
+    st.rerun()
+
+
+def job_details(analysis: dict) -> None:
+    """Questions about real experience this job cares about; answers go into the profile after a preview."""
+    questions = analysis.get("profile_questions") or []
+    if not questions:
+        st.caption("Your profile already has the detail this job needs.")
+        return
+    draft = st.session_state.get("job_draft")
+    saved_now = st.session_state.get("job_details_saved") and not draft
+    if saved_now:
+        st.success("✅ Your answers are in your profile and will be used when you build.")
+    else:
+        st.caption("Answer with real facts only: numbers, scope, tools. Skip any you can't answer. Your answers "
+                   "are added to your profile (you see the change first), so every future resume can use them too.")
+    for i, q in enumerate(questions):
+        st.text_input(q["question"], key=f"pq_{i}", disabled=bool(draft or saved_now),
+                      placeholder=f"e.g. {q['example']}" if q.get("example") else "Your answer (optional)",
+                      help=f"Supports: {q['requirement']}" if q.get("requirement") else None)
+    pairs = [(q["question"], st.session_state.get(f"pq_{i}") or "") for i, q in enumerate(questions)]
+    answered = [(q, a.strip()) for q, a in pairs if a.strip()]
+    if saved_now:
+        if st.button("✏️ Change my answers"):
+            st.session_state.pop("job_details_saved", None)
             st.rerun()
+        return
+    if draft:
+        st.markdown("**Here's how your profile changes.** Check it, then save.")
+        for line in draft.get("checks", []):
+            st.markdown(line)
+        for line in draft["changes"]:
+            st.caption("• " + line)
+        with st.expander("See the full updated profile"):
+            text = st.text_area("Updated profile", draft["profile"], height=320,
+                                key=f"jobdraft_{hashlib.sha256(draft['profile'].encode()).hexdigest()[:12]}")
+        save_col, discard_col = st.columns(2)
+        if save_col.button("💾 Save to my profile", type="primary", width="stretch"):
+            save_profile_for_job(text)
+        if discard_col.button("Discard changes", width="stretch"):
+            st.session_state.pop("job_draft", None)
+            st.rerun()
+        return
+    if not remember:
+        st.caption("Turn on *Remember my resume* in the sidebar to add answers to your profile.")
+        return
+    label = f"➕ Add {len(answered)} answer{'s' if len(answered) != 1 else ''} to my profile" if answered \
+        else "➕ Add my answers to my profile"
+    if st.button(label, disabled=not answered or not claude_ready, width="stretch"):
+        if engine == ENGINE_MANUAL:  # no Claude call: the answers go under one heading as they are
+            save_profile_for_job(store.add_to_profile(master, "Other", "\n".join(f"- {q} {a}" for q, a in answered)))
+        else:
+            merge_profile(master, [], main.answers_note(answered), key="job_draft")
+
 
 skill_names: dict[str, str] = {}
 confirmations: dict = {}
 unanswered: list[str] = []
-if analysis:
-    title = main.clean_title(job_title or analysis["job_title"])
-    info = [f"**{title}**"] + [x for x in (analysis["company"], analysis.get("industry"), analysis["job_location"],
-                                           analysis.get("employment_type"), analysis.get("seniority_level")) if x]
-    st.markdown(" · ".join(info))
-    if analysis["seniority"]:
-        st.caption(analysis["seniority"])
-    skills = analysis["skills"]
-    with st.expander(f"📊 Requirements by importance ({len(skills)})"):
-        rank = {"essential": 0, "domain": 1, "preferred": 2, "additional": 3}
-        st.dataframe([{"Requirement": s["skill"], "Category": match.CATEGORY_LABEL[match.category_of(s)],
-                       "Weight": "●" * max(1, min(5, s.get("weight") or 3)),
-                       "Your profile": {"A": "✅ shown", "B": f"🔁 equivalent: {s['evidence']}"}.get(
-                           s["group"], "❓ not shown")}
-                      for s in sorted(skills, key=lambda s: (rank[match.category_of(s)], -(s.get("weight") or 3)))],
-                     hide_index=True, width="stretch")
-        extra_info = [("Soft skills", analysis.get("soft_skills")),
-                      ("Education", analysis.get("education_requirements")),
-                      ("Experience", analysis.get("experience_requirements")),
-                      ("Main responsibilities", analysis.get("responsibilities"))]
-        for label, values in extra_info:
-            if values:
-                st.markdown(f"**{label}:** " + "; ".join(values))
-    skill_names = {skill_key(s["skill"]): s["skill"] for s in skills}
-    strong = [s for s in skills if s["group"] == "A"]
-    transferable = [s for s in skills if s["group"] == "B"]
-    to_confirm = [s for s in skills if s["group"] not in ("A", "B")]
-    if strong:
-        st.markdown("✅ **In your resume:** " + " ".join(f":green-background[{s['skill']}]" for s in strong))
-    strict = content_mode == "Strict"
-    if strict:  # an equivalent is shown as itself; the job's term needs the candidate's confirmation
-        to_confirm = transferable + to_confirm
-    elif transferable:
-        st.markdown("🔁 **Transferable:** " + " ".join(f":blue-background[{s['skill']} ← {s['evidence']}]"
-                                                      for s in transferable))
-    if to_confirm:
-        if strict:
-            st.markdown(f"❓ **Needs your confirmation** ({len(to_confirm)}) — not shown in your profile. "
-                        "**Strong** or **Basic** includes it (Basic: Skills only, never as experience); "
-                        "**Learning**, **No** or no answer keeps it out and lists it as a gap.")
-            st.caption("🔁 marks requirements where you have an equivalent: that equivalent is shown either way. "
-                       "Answers are remembered for future jobs.")
-        else:
-            st.markdown(f"❓ **Not in your resume yet** ({len(to_confirm)}) — all of them are added to Skills and "
-                        "linked to your closest real experience. Optional: mark **No** for any you never want listed.")
-            st.caption("Interviewers may ask about every listed skill: the report gives a quick plan for each one "
-                       "without a real anchor. Answers are remembered for future jobs.")
-        b1, b2, _ = st.columns([1, 1, 2])
-        names = [s["skill"] for s in to_confirm]
-        b1.button("Mark unanswered as Basic", on_click=answer_unanswered, args=(names, "Basic"), width="stretch")
-        b2.button("Mark unanswered as No", on_click=answer_unanswered, args=(names, "No"), width="stretch")
-        confirm_widgets(to_confirm, saved_answers)
+with step(4, "Answer a few questions", "Both parts are optional and take a minute. They make the resume both "
+                                       "stronger and more accurate."):
+    if not analysis:
+        st.caption("The questions appear here after the analysis in step 3.")
     else:
-        st.success("Every skill in this job is already shown in your resume.")
+        skills = analysis["skills"]
+        skill_names = {skill_key(s["skill"]): s["skill"] for s in skills}
+        transferable = [s for s in skills if s["group"] == "B"]
+        to_confirm = [s for s in skills if s["group"] not in ("A", "B")]
+        strict = content_mode == "Strict"
+        if strict:  # an equivalent is shown as itself; the job's term needs the candidate's confirmation
+            to_confirm = transferable + to_confirm
 
-    answers = collect_answers(saved_answers)
-    if remember and answers != saved_answers:
-        save_confirmations(answers)
-    # This job's skills, plus keywords added later (e.g. from an external checker's report)
-    job_keys = {skill_key(s["skill"]) for s in skills} | {skill_key(k) for k in st.session_state.get("job_keywords", [])}
-    confirmations = {k: v for k, v in answers.items() if k in job_keys}
-    unanswered = [s["skill"] for s in to_confirm if skill_key(s["skill"]) not in confirmations]
-else:
-    title = main.clean_title(job_title)
+        st.markdown("**a · Skills the job asks for that your profile doesn't show**")
+        if not strict and transferable:
+            st.markdown("🔁 **Transferable:** " + " ".join(f":blue-background[{s['skill']} ← {s['evidence']}]"
+                                                          for s in transferable))
+        if to_confirm:
+            if strict:
+                st.caption(f"{len(to_confirm)} to answer. **Strong** or **Basic** includes it (Basic: Skills only, "
+                           "never as experience); **Learning**, **No** or no answer keeps it out and lists it as a "
+                           "gap. 🔁 marks ones where you have an equivalent, which is shown either way. Answers are "
+                           "remembered for future jobs.")
+            else:
+                st.caption(f"{len(to_confirm)} not in your resume yet: all are added to Skills and linked to your "
+                           "closest real experience. Optional: mark **No** for any you never want listed. "
+                           "Interviewers may ask about every listed skill.")
+            b1, b2, _ = st.columns([1, 1, 2])
+            names = [s["skill"] for s in to_confirm]
+            b1.button("Mark unanswered as Basic", on_click=answer_unanswered, args=(names, "Basic"), width="stretch")
+            b2.button("Mark unanswered as No", on_click=answer_unanswered, args=(names, "No"), width="stretch")
+            confirm_widgets(to_confirm, saved_answers)
+        else:
+            st.caption("✅ None: every requirement is already in your profile.")
+
+        answers = collect_answers(saved_answers)
+        if remember and answers != saved_answers:
+            save_confirmations(answers)
+        # This job's skills, plus keywords added later (e.g. from an external checker's report)
+        job_keys = {skill_key(s["skill"]) for s in skills} | {skill_key(k) for k in
+                                                                st.session_state.get("job_keywords", [])}
+        confirmations = {k: v for k, v in answers.items() if k in job_keys}
+        unanswered = [s["skill"] for s in to_confirm if skill_key(s["skill"]) not in confirmations]
+
+        st.markdown("**b · Details that make your experience count for this job**")
+        job_details(analysis)
+    if saved_answers:
+        st.caption(f"🧠 {len(saved_answers)} skill answers remembered from earlier jobs.")
 
 # --------------------------------------------------------------------------- #
 # Shared context for building and improving
@@ -949,43 +1052,66 @@ if page_option == "Auto":
 else:
     page_limit = int(page_option[0])
 target_settings["page_limit"] = page_limit
-ctx = {"page_limit": page_limit,"template": template, "accent": accent, "page": page, "font": font, "size": size, "job_title": title,
-       "master": master, "job_text": job_text, "settings": target_settings, "analysis": analysis,
-       "confirmations": confirmations, "job_skills": job_skills,
+ctx = {"page_limit": page_limit, "template": template, "accent": accent, "page": page, "font": font, "size": size,
+       "job_title": title, "master": master, "job_text": job_text, "settings": target_settings,
+       "analysis": analysis, "confirmations": confirmations, "job_skills": job_skills,
        "keywords": list(dict.fromkeys(job_skills + ([title] if title else []))),
        "target": target, "max_rounds": max_rounds}
 
 # --------------------------------------------------------------------------- #
-# 4. Build
+# Step 5. Build
 # --------------------------------------------------------------------------- #
 auto_build = st.session_state.pop("auto_build", False)  # set once, right after an analysis
-if analysis:
-    missing_bits = ["the job type"] if not job_type else []  # skill answers are optional
-    can_build = not missing_bits and claude_ready
-    if missing_bits:
-        st.warning("To build your resume, choose " + " and ".join(missing_bits) + ".")
-    if engine == ENGINE_MANUAL:
-        if can_build:
-            with st.expander("✨ Build with claude.ai (copy-paste)", expanded=not versions()):
-                reply = manual_step(main.manual_prompt(*main.tailor_request(
-                    master, job_text, title, target_settings, analysis, confirmations)),
-                    "tailor_reply", "✨ Create my resume")
-                if reply is not None:
-                    try:
-                        result = main.parse_claude_reply(reply)
-                        start_versions(polish(result, ctx), "Built with claude.ai", title, ctx["keywords"])
-                        remember_master()
-                        st.rerun()
-                    except main.TailorError as e:
-                        st.error(str(e))
+with step(5, "Build your resume", f"Claude writes it from your profile and answers. It is then checked and "
+                                  f"improved automatically, up to an ATS score of {target}."):
+    if not analysis:
+        st.caption("Available after the analysis in step 3.")
     else:
-        clicked = st.button(f"✨ Build my resume and optimize to {target}%", type="primary", width="stretch",
-                            disabled=not can_build)
-        if clicked or (auto_build and can_build and not unanswered):  # new skills: let them be seen first
-            build_resume(ctx)
+        can_build = bool(job_type) and claude_ready
+        if not job_type:
+            st.warning("Choose the job type in step 2 first.")
+        if engine == ENGINE_MANUAL:
+            if can_build:
+                with st.expander("✨ Build with claude.ai (copy-paste)", expanded=not versions()):
+                    reply = manual_step(main.manual_prompt(*main.tailor_request(
+                        master, job_text, title, target_settings, analysis, confirmations)),
+                        "tailor_reply", "✨ Create my resume")
+                    if reply is not None:
+                        try:
+                            result = main.parse_claude_reply(reply)
+                            start_versions(polish(result, ctx), "Built with claude.ai", title, ctx["keywords"])
+                            remember_master()
+                            st.rerun()
+                        except main.TailorError as e:
+                            st.error(str(e))
+        else:
+            label = ("🔁 Build again from your profile" if versions()
+                     else f"✨ Build my resume and optimize to {target}%")
+            clicked = st.button(label, type="secondary" if versions() else "primary", width="stretch",
+                                disabled=not can_build)
+            if versions():
+                st.caption("Your resume is below in step 6. Build again after changing your profile or answers.")
+            nothing_to_ask = not unanswered and not analysis.get("profile_questions")
+            if clicked or (auto_build and can_build and nothing_to_ask):
+                build_resume(ctx)
+
+has_job_type = bool(job_type)
+done = [bool(master), bool(job_text) and has_job_type, bool(analysis),
+        bool(analysis) and (bool(versions()) or not unanswered), bool(versions()),
+        bool(st.session_state.get("application_id"))]
+hints = ["upload your resume (PDF or Word) or paste it in step 1.",
+         "paste the job description" + (" and choose the job type" if not has_job_type else "") + " in step 2."
+         if not job_text else "choose the job type in step 2.",
+         "click 🔍 Analyse the job in step 3.",
+         "answer the questions in step 4 (all optional), then build in step 5.",
+         "click ✨ Build my resume in step 5.",
+         "check the review, download your PDF in step 6, then 💾 save the application."]
+show_tracker(done, hints)
 
 persist()
 if not versions():
+    with step(6, "Review and download", "Your resume, its checks and the PDF download appear here after step 5."):
+        pass
     st.stop()
 
 # --------------------------------------------------------------------------- #
@@ -1017,7 +1143,9 @@ issues = gate_for(resume, ctx, len(pages))
 serious = [i for i in issues if i.severity == quality.SERIOUS]
 gate_ok = not serious or st.session_state.get(f"gate_ack_{len(vs)}", False)
 
-st.divider()
+st.subheader("6 · Review and download")
+st.caption("Check the scores and the quality gate, then download your PDF. The other tabs help you improve it, "
+           "see where every claim comes from, write a cover letter and save the application.")
 if notice := st.session_state.pop("notice", None):
     st.success(notice)
 score_col, match_col, words_col, actions_col = st.columns([1, 1, 1, 1.6])
@@ -1046,8 +1174,8 @@ elif issues:
     st.warning(f"🔎 {len(issues)} suggestion{'s' if len(issues) != 1 else ''} to review before you send it — "
                "see the **Review & evidence** tab.")
 
-tab_improve, tab_report, tab_recruiter, tab_design, tab_cover, tab_edit, tab_save = st.tabs(
-    ["📈 Improve ATS score", "🧾 Review & evidence", "👔 Recruiter view", "🎨 Design & download",
+tab_design, tab_report, tab_improve, tab_recruiter, tab_cover, tab_edit, tab_save = st.tabs(
+    ["⬇️ Download & design", "🧾 Review & evidence", "📈 Improve", "👔 Recruiter view",
      "✉️ Cover letter", "✏️ Edit text", "💾 Save application"])
 
 # --------------------------------------------------------------------------- #
@@ -1072,7 +1200,7 @@ with tab_improve:
             st.markdown(TIPS)
         if not meta["ats"]:
             st.warning(f"**{meta['label']}** is a design-focused template; for ATS checks switch to an "
-                       "✅ ATS-friendly one in *Design & download*.")
+                       "✅ ATS-friendly one in *Download & design*.")
 
     with keywords_col:
         st.markdown("**Job keywords**")
@@ -1173,7 +1301,7 @@ with tab_report:
     if fit.missing:
         status_text = {"verified": "in your profile — not used yet", "reworded": "in your profile in other words",
                        "confirmed": "you confirmed it — not used yet",
-                       "needs confirmation": "not in your profile — confirm it in step 3 if true",
+                       "needs confirmation": "not in your profile — confirm it in step 4 if true",
                        "unsupported": "you're learning it — reported as a gap", "excluded": "you said No"}
         st.markdown("**Not shown in this resume:**")
         for r in sorted(fit.missing, key=lambda r: (r.category != "essential", -r.weight)):

@@ -90,6 +90,11 @@ ANALYSIS_SCHEMA = _obj({
     "experience_requirements": _STR_LIST,
     "responsibilities": _STR_LIST,
     "domain_keywords": _STR_LIST,
+    "profile_questions": {"type": "array", "items": _obj({
+        "question": _STR,     # names the role/project: "ConvSync: how many REST APIs did you build in Spring Boot?"
+        "requirement": _STR,  # the job requirement a good answer would prove
+        "example": _STR,      # a short example of the kind of answer wanted, never a claim about the candidate
+    })},
 })
 
 RESPONSE_SCHEMA = _obj({
@@ -160,7 +165,8 @@ Return:
 - soft_skills: communication, leadership, collaboration and similar requirements, in the posting's words.
 - education_requirements and experience_requirements: as stated (e.g. "Bachelor's in Accounting", "3+ years in B2B SaaS sales").
 - responsibilities: the 5-8 main things the person will do.
-- domain_keywords: industry, product type, customer and scale terms (e.g. fintech, B2B SaaS, hospital, e-commerce, high-volume)."""
+- domain_keywords: industry, product type, customer and scale terms (e.g. fintech, B2B SaaS, hospital, e-commerce, high-volume).
+- profile_questions: 3-7 questions to the candidate whose real answers would make the resume for THIS job stronger. Ask only about experience the profile already shows or hints at for the job's most important requirements, where the profile lacks detail: numbers and scale (how many APIs, users, records, team size), scope and ownership, which tools were used in which role, outcomes. Also ask when a requirement has a weak or indirect anchor (e.g. "microservice-style" when the job asks for microservices: did you build separately deployed services?). Name the role or project in each question, keep it to one short sentence, most important first. requirement = the job requirement it supports. example = a short sample answer showing the kind of detail wanted (e.g. "About 25 endpoints for orders and billing, used by 3 internal teams"), never presented as fact. Never ask about requirements the profile clearly lacks; those are handled separately. [] if the profile already has the detail."""
 
 _COMMON_RULES = """You receive the MASTER_RESUME (the candidate profile: the only source of facts; never reuse text, headlines, locations or visa lines from any other job), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (requirements already classified and weighted) and the candidate's SKILL_CONFIRMATIONS.
 

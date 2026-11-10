@@ -10,7 +10,7 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 
 ## Features
 
-**Your profile, entered once**
+**Your profile, entered once and strengthened for each job**
 - 📄 Import your resume from **PDF, Word, JSON, Markdown or text** (several files at once, e.g. your resume plus your LinkedIn PDF). It is **saved straight away** and becomes your master profile, the source of truth for every resume.
 - 🪄 **Build up your profile automatically**: Claude merges your resume, LinkedIn export, older resumes and notes into one organised profile. It keeps every real fact and number, invents nothing, and asks what's missing (e.g. user counts, which CI/CD tool). Numbers it added or dropped are flagged, and nothing is saved until you review it.
 - ✏️ Edit it any time, or **➕ add** a new role, project, certification or achievement under its section without retyping anything. Every change keeps the previous version in a **history** you can restore.
@@ -60,12 +60,16 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 
 ## How it works
 
-1. **Profile**: upload your resume once (PDF, DOCX, JSON, MD or TXT; LinkedIn PDF too). It's saved at once; open 🪄 to let Claude organise it and answer its questions.
-2. **The job**: paste the job description and title, and pick the job type (Remote / Relocation / Local). Optionally set the length and must-include / must-exclude items.
-3. **🔍 Analyse the job**: see the requirements by importance, then answer Strong / Basic / Learning / No for the ones your profile doesn't show. Answers are remembered.
-4. **✨ Build**: Claude tailors the resume from your profile. The clean-up and quality gate run on the result, and auto-improve sends any serious issue back to Claude first.
-5. **Review**: the 📈 ATS check, 🧾 Review & evidence, and 👔 Recruiter view tabs. Resolve the quality gate.
-6. **Export**: pick a design, download the PDF or Word file, and **💾 Save the application**. For the next job, click **🆕 New job**.
+The page is six numbered steps, with a tracker at the top showing what's done and what to do next.
+
+1. **Your profile**: upload your resume once (PDF, DOCX, JSON, MD or TXT; LinkedIn PDF too). It's saved at once; open 🪄 to let Claude organise it and merge in more sources.
+2. **The job**: paste the job description, and pick the job type (Remote / Relocation / Local). Optionally set the length and must-include / must-exclude items.
+3. **🔍 Analyse the job**: Claude ranks every requirement by importance and shows which ones your profile already proves.
+4. **Answer a few questions** (optional):
+   - **a.** Strong / Basic / Learning / No for skills the job wants that your profile doesn't show. Answers are remembered.
+   - **b.** Job-specific questions about your real experience, e.g. *"ConvSync: how many REST APIs did you build in Spring Boot?"*. Your answers are merged into your profile under the right role. You see the change first, and invented numbers are flagged.
+5. **✨ Build**: Claude tailors the resume from your profile and answers. The clean-up and quality gate run on the result, and auto-improve sends any serious issue back to Claude first.
+6. **Review and download**: download the PDF or Word file, check 🧾 Review & evidence and the 👔 Recruiter view, write a ✉️ cover letter, and **💾 save the application**. For the next job, click **🆕 New job**.
 
 ## Quick start
 
