@@ -21,12 +21,17 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 - Each requirement gets a **category** (essential / preferred / domain / additional), a **1-5 weight** taken from the posting, and **synonyms**. Each one is also compared with your profile: ✅ shown, 🔁 equivalent, or ❓ needs your confirmation.
 
 **Evidence-based tailoring**
-- 🛡️ **Strict mode (default):** every statement must trace to your profile or to your own confirmation. **Strong** and **Basic** answers are included (Basic in Skills only, never as experience). **Learning**, **No** and unanswered requirements stay out and are reported as gaps.
-- ⚡ **Flexible mode (opt-in):** every job keyword is listed except the ones you mark **No**, each linked to your closest real experience, for maximum keyword coverage. The quality gate warns about every claim without backing.
+- 🛡️ **Only what's true:** every statement must trace to your profile, your **saved answers** or your own skill confirmations. **Strong** answers can appear anywhere true; **Basic** ones only under *Working knowledge*. **Learning**, **No** and unanswered requirements stay out and are reported as gaps.
+- 💬 **Saved answers override your profile**: facts you give ("At Syntivis AG I worked solo, directly with the CEO", "I built Tracio for clients and don't know its user numbers") are sent with every build. A bullet that contradicts one is corrected or flagged.
 - The strategy adapts to the profession and seniority: section order, what the summary leads with, and 1 or 2 pages (Auto: 1 page for entry-level and junior jobs).
-- 🧹 Automatic clean-up after every Claude answer:
-  - skills your profile doesn't support are removed (Strict);
-  - bracket hedges and the job ad's "(m/f/d)" are removed;
+- 🧹 Automatic clean-up after every Claude answer (`guard.py`):
+  - the location line comes from **this job's** type only; relocation or visa text from an earlier job is removed, even if it's in your profile;
+  - the job ad's work areas, departments and hiring steps ("evals", "QA", "technical assessment") never become skills;
+  - your relevant profile skills are kept (SQL, PostgreSQL, Next.js...), job requirements first;
+  - counting numbers that aren't in your profile ("2 LLM APIs", "across 4 AWS services") are removed;
+  - brackets that justify a skill ("(via Angular experience)", "unit tests (QA)") and the job ad's "(F/M/D)" are removed;
+  - the headline is your real title plus 3-5 real skills, one line under 95 characters;
+  - every link in your profile (LinkedIn, GitHub, portfolio) is in the contact line;
   - years of experience are capped at your real dated span;
   - duplicates and catch-all skill lines are removed;
   - dates are normalised;
@@ -43,9 +48,8 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
   - missing evidence and possible rejection reasons;
   - truthful improvements, and a button to apply them;
   - interview questions and language issues.
-- 🛑 **Quality gate**:
-  - **Serious** issues block downloads until you review them: unsupported skills or bullet claims, skills you said No to, numbers not in your profile, dates that end before they start or start in the future, a missing email.
-  - **Warnings** are advice: duplicate bullets, keyword stuffing, buzzwords, inconsistent punctuation, repeated words, too many pages.
+- ✅ **Seven checks before export**: location line, skills sources, relevant skills kept, saved answers, numbers, unconfirmed experience, job-ad text and links. Anything flagged blocks the download until you click **🗑️ Remove it** or **✅ It's true, keep it**, or **🤖 Ask Claude to fix them all**. Dates, contact details and duplicates are checked too.
+- 🔍 **New vs your profile**: the whole resume with every word that isn't in your profile or answers highlighted in red, and skills marked as in your profile, confirmed by you, or new.
 
 **Applications**
 - 💾 **Save application**: company, title, job description, a profile snapshot, every version, the reports, status, date, notes and the **exact PDF and Word files**.
@@ -60,16 +64,14 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 
 ## How it works
 
-The page is six numbered steps, with a tracker at the top showing what's done and what to do next.
+Four steps, one or two clicks. A tracker at the top shows what's done and what to do next.
 
-1. **Your profile**: upload your resume once (PDF, DOCX, JSON, MD or TXT; LinkedIn PDF too). It's saved at once; open 🪄 to let Claude organise it and merge in more sources.
-2. **The job**: paste the job description, and pick the job type (Remote / Relocation / Local). Optionally set the length and must-include / must-exclude items.
-3. **🔍 Analyse the job**: Claude ranks every requirement by importance and shows which ones your profile already proves.
-4. **Answer a few questions** (optional):
-   - **a.** Strong / Basic / Learning / No for skills the job wants that your profile doesn't show. Answers are remembered.
-   - **b.** Job-specific questions about your real experience, e.g. *"ConvSync: how many REST APIs did you build in Spring Boot?"*. Your answers are merged into your profile under the right role. You see the change first, and invented numbers are flagged.
-5. **✨ Build**: Claude tailors the resume from your profile and answers. The clean-up and quality gate run on the result, and auto-improve sends any serious issue back to Claude first.
-6. **Review and download**: download the PDF or Word file, check 🧾 Review & evidence and the 👔 Recruiter view, write a ✉️ cover letter, and **💾 save the application**. For the next job, click **🆕 New job**.
+1. **Your profile** (once): upload your resume (PDF, DOCX, JSON, MD or TXT; LinkedIn PDF too). It's saved at once. The app offers one-click fixes: remove a location line left over from an earlier resume, add your GitHub link.
+2. **The job**: paste the posting, pick Remote / Relocation / Local, click **✨ Create my resume**. If there's nothing to ask, the resume is built straight away.
+3. **Questions** (only when needed): Strong / Basic / Learning / No for skills the job wants that your profile doesn't show, and a few job-specific questions about your real experience. Click **✨ Build my resume**. Answers are saved for every future job.
+4. **Check & download**: fix or keep anything flagged, then download the PDF or Word file. Tabs: 🔍 New vs your profile, 🎨 Preview & design, 🧾 Evidence, 📈 Improve, 👔 Recruiter view, ✉️ Cover letter, ✏️ Edit text, 💾 Save application.
+
+**🆕 New job** keeps your profile, saved answers and skill answers. **♻️ Reset** clears everything.
 
 ## Quick start
 
@@ -133,7 +135,8 @@ resume-automator/
 ├── evidence.py          # Evidence checks: synonym-aware matching, claim status, bullet tracing
 ├── match.py             # Weighted job-match estimate (essential / preferred / domain / additional)
 ├── review.py            # Automatic clean-up and review checks
-├── quality.py           # Quality gate before export (serious issues and warnings)
+├── guard.py             # Source guard: fixes and checks 1-7 so every claim comes from your profile/answers
+├── quality.py           # Other checks before export (dates, contact, duplicates, length)
 ├── ats.py               # Built-in ATS checker (reads the PDF text layer)
 ├── store.py             # Saved applications and profile history (local files under data/)
 ├── render.py            # Templates → PDF (headless browser), Word (.docx), previews
@@ -149,7 +152,7 @@ resume-automator/
 Yes. The app is open source, and with Claude Code it runs on your existing Claude Pro/Max subscription (it counts toward your plan's usage limits) with no API credits. API mode costs a few cents per resume.
 
 **Will it make up skills or experience?**
-Not in Strict mode (the default). Every skill and bullet is checked against your profile and your own confirmations. Unsupported skills are removed automatically. Anything else, such as a bullet that names a tool you don't have or a number that isn't in your profile, blocks the download until you review it. Requirements you don't have are reported as gaps with a plan to close them. Flexible mode lists every job keyword (except No answers) for maximum keyword coverage, and the quality gate warns about each one.
+No. Every skill, number and bullet is checked against your profile, your saved answers and your own confirmations. Unsupported skills, job-ad text and counted-up numbers are removed automatically. Anything else, such as a bullet that names a tool you don't have or a number that isn't in your sources, blocks the download until you remove it or confirm it's true. Requirements you don't have are reported as gaps with a plan to close them. (The command line still has `--mode Flexible` for keyword-injection experiments; the app is Strict only.)
 
 **My score stopped going up. Why?**
 What remains is usually requirements your profile doesn't show (Strict mode keeps them out on purpose; the report lists them as gaps), or checks only real facts can fix, like too few bullets with numbers. Add real experience and numbers to your profile with ➕ Add, or answer Strong / Basic for skills you really have.

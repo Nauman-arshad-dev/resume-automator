@@ -24,7 +24,7 @@ import main
 import render
 
 HEADLINE_MAX = 95
-SKILLS_MAX = 20
+SKILLS_MAX = 30
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 # A bracket that explains or hedges a skill: "(via strong AWS experience)", "(basics)", "(learning)"...
 HEDGE = re.compile(r"\s*\((?=[^)]*\b(?:via|basics?|learning|familiar|exposure|equivalent|similar|transferable|"
@@ -241,6 +241,8 @@ def fix_resume(resume: dict, job_skills: list[str], confirmations: dict, master:
         for item in reversed(list(g["items"])):
             if total <= SKILLS_MAX:
                 break
+            if master and evidence.mentions(master_norm, item, normalised=True):
+                continue  # never drop a real profile skill: Claude already chose what's relevant
             if not any(ats.has_keyword(item.lower(), k) or ats.has_keyword(k, item.lower()) for k in job_lower):
                 g["items"].remove(item)
                 total -= 1

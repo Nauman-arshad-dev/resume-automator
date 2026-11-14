@@ -90,6 +90,7 @@ ANALYSIS_SCHEMA = _obj({
     "experience_requirements": _STR_LIST,
     "responsibilities": _STR_LIST,
     "domain_keywords": _STR_LIST,
+    "not_skills": _STR_LIST,  # work areas, departments, project types, hiring steps: never resume skills
     "profile_questions": {"type": "array", "items": _obj({
         "question": _STR,     # names the role/project: "ConvSync: how many REST APIs did you build in Spring Boot?"
         "requirement": _STR,  # the job requirement a good answer would prove
@@ -153,6 +154,7 @@ Return:
 - profession: the field in a few words ("software engineering", "accounting", "digital marketing").
 - seniority_level: one of Entry-level, Junior, Mid-level, Senior, Lead / Manager, Executive. seniority: one line on years of experience, leadership, ownership or mentoring signals.
 - skills: every concrete requirement a screener checks for: hard skills, tools, software, platforms, methods, frameworks, regulations, certifications, licences, domain knowledge (e.g. "IFRS", "Salesforce", "Google Ads", "SQL", "Kubernetes", "patient triage", "Zendesk", "PMP"). Use the posting's exact wording and spelling, most important first.
+  - A skill is something a person can have and a screener could test. NEVER list as skills: what the company or its clients work on ("evals, RL environments, training data for frontier models", "big data, static analysis" as product areas), departments or job families ("software, data, QA, security, infrastructure, design"), project types, team names, hiring-process steps ("technical assessment", "interview", "take-home") or generic fields ("Software engineering", "Full stack development"). Put those in not_skills.
   - category: "essential" (must-have, required, minimum qualification), "preferred" (nice to have, bonus, plus), "domain" (industry or product knowledge) or "additional" (other qualifications).
   - weight: 1-5 from the posting itself: 5 = essential and stressed (in the title, repeated, "must"), 3 = clearly required, 1 = passing mention. Do not give every keyword the same weight.
   - importance: "required" for essential/domain, "nice to have" otherwise. mentions: how many times the posting mentions it.
@@ -166,9 +168,12 @@ Return:
 - education_requirements and experience_requirements: as stated (e.g. "Bachelor's in Accounting", "3+ years in B2B SaaS sales").
 - responsibilities: the 5-8 main things the person will do.
 - domain_keywords: industry, product type, customer and scale terms (e.g. fintech, B2B SaaS, hospital, e-commerce, high-volume).
+- not_skills: the posting's work areas, departments, project types and hiring steps (see skills). They are never asked about or written into a resume.
 - profile_questions: 3-7 questions to the candidate whose real answers would make the resume for THIS job stronger. Ask only about experience the profile already shows or hints at for the job's most important requirements, where the profile lacks detail: numbers and scale (how many APIs, users, records, team size), scope and ownership, which tools were used in which role, outcomes. Also ask when a requirement has a weak or indirect anchor (e.g. "microservice-style" when the job asks for microservices: did you build separately deployed services?). Name the role or project in each question, keep it to one short sentence, most important first. requirement = the job requirement it supports. example = a short sample answer showing the kind of detail wanted (e.g. "About 25 endpoints for orders and billing, used by 3 internal teams"), never presented as fact. Never ask about requirements the profile clearly lacks; those are handled separately. [] if the profile already has the detail."""
 
-_COMMON_RULES = """You receive the MASTER_RESUME (the candidate profile: the only source of facts; never reuse text, headlines, locations or visa lines from any other job), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (requirements already classified and weighted) and the candidate's SKILL_CONFIRMATIONS.
+_COMMON_RULES = """You receive the MASTER_RESUME (the candidate profile), the CANDIDATE_ANSWERS (facts the candidate gave about their own experience), the JOB_DESCRIPTION, the TARGET_SETTINGS, the JOB_ANALYSIS (requirements already classified and weighted) and the candidate's SKILL_CONFIRMATIONS.
+
+SOURCES OF FACTS: only the MASTER_RESUME and the CANDIDATE_ANSWERS. Every generation starts from them and this job only: never reuse text, headlines, locations, relocation or visa lines from any earlier resume or job. CANDIDATE_ANSWERS OVERRIDE the master resume where they conflict (e.g. "I worked solo at X" means no team, code-review or collaboration claims at X; "built for clients" means never "launched" or "my own" products; "I don't know the user numbers" means no user counts).
 
 Adapt the strategy to the profession and seniority in JOB_ANALYSIS: a backend engineer's resume leads with systems, scale and stack; an accountant's with standards, closes, audits and accuracy; a marketer's with channels, budgets and growth; a support specialist's with volume, satisfaction and tools; a manager's with team size, scope and outcomes; an entry-level candidate's with education, projects, internships and coursework. Choose section order accordingly (e.g. Education before Experience for entry-level candidates with little work history).
 
@@ -180,18 +185,22 @@ STRUCTURE (non-negotiable):
 - Length: follow TARGET_SETTINGS page_limit (1 page: about 300-550 words; 2 pages: about 450-750 words). Cut the least relevant bullets and projects first, never whole roles or sections.
 
 SKILLS:
-- 3-6 categories written "Category: a, b, c", named for the profession (e.g. "Accounting: ...", "Tools: ...", "Channels: ...", "Languages & Frameworks: ..."), ordered by relevance, job requirements first, in the job's exact spelling.
-- No "Working knowledge", "Familiar with", "Currently learning" or other catch-all buckets, and no explanations in brackets.
-- No skill twice, not even under two names. About 12-20 items in total; drop non-job skills first. No soft-skills line: show soft skills through bullets.
+- Only skills from the MASTER_RESUME or confirmed Strong/Basic in SKILL_CONFIRMATIONS. Never the job ad's work areas, departments, project types, process steps or hiring words (see JOB_ANALYSIS not_skills), even if they appear in the job.
+- Keep every master-resume skill that is relevant to this job's field (usually 20-30 items): reorder and group them so the job's requirements come first; drop a skill only when it is clearly irrelevant to this job. A skill used in a bullet must also be in Skills.
+- 3-7 categories written "Category: a, b, c", named for the profession (e.g. "Accounting: ...", "Tools: ...", "Languages & Frameworks: ..."), in the job's exact spelling where it names the same thing. Skills confirmed only as "Basic" go on a last line "Working knowledge: a, b"; no other catch-all bucket.
+- No skill twice, not even under two names, and no brackets that explain or justify a skill. No soft-skills line: show soft skills through bullets.
 
 HEADER:
-- headline: one line under 95 characters: "<Title aligned to the job> | <key skill> | <key skill>". Use the job's title family only where it truthfully describes the candidate; never the job ad's gender marker such as "(m/f/d)", "(F/M/D)", "(w/m/d)" or "(all genders)".
-- availability (the line under the contact details), from TARGET_SETTINGS only: Remote -> "Open to remote work (UTC+X)", never relocation or visas. Relocation -> "Open to relocation to <city, country> (<visa> sponsorship)" with the visa from the settings or that country's usual skilled-work visa (Germany: EU Blue Card; United Kingdom: Skilled Worker visa; United States: H-1B visa; Netherlands: Highly Skilled Migrant visa; Canada: work permit). Local / Onsite -> "".
-- contact holds only the email, phone, location and links from the profile. Follow the conventions of the job's country, but never add a photo, age, date of birth, marital status or nationality.
+- headline: one line under 95 characters: "<the candidate's real title family> | <3-5 of their real top skills for this job>". The title family must truthfully describe the candidate (e.g. "Full Stack Developer"); never the job ad's gender or work-model tags ("(m/f/d)", "(F/M/D)", "(all genders)", "Remote", "Hybrid"), and never a field the profile doesn't show (no "AI/ML" for LLM integration work without machine learning experience).
+- availability: write exactly TARGET_SETTINGS availability_line (the app sets it from this job's Job Type). Never copy any "Open to relocation", "Open to remote work", visa or sponsorship text from the MASTER_RESUME.
+- contact holds the email, phone, location and EVERY link in the profile (LinkedIn, GitHub, portfolio), nothing else. Follow the conventions of the job's country, but never add a photo, age, date of birth, marital status or nationality.
 
 SUMMARY: 2-4 sentences, confident and human: "<Title family> with <N>+ years ..." where N = floor of the span from the earliest dated role to today (never more; never claim years for a single tool unless the profile shows that span for it). Name the most relevant verified skills plainly, the strongest relevant achievement and two or three matching strengths. No buzzwords, no first-person pronouns, no copied sentences from the job. Entry-level candidates: lead with education, projects or internships instead of years.
 
-EXPERIENCE BULLETS: most job-relevant first, 3-6 for recent roles, 1-3 for older ones. Action verb + what was done + tool/method + result. Mirror the job's terminology where the profile supports it, in context rather than as lists. Keep every real number exactly; never add a number, percentage, team size, budget or metric that is not in the profile (no real number: describe the impact in words). No "Responsible for", "Worked on", "Helped". No keyword stuffing: a term appears where it is relevant, not repeated for density.
+EXPERIENCE BULLETS: most job-relevant first, 3-6 for recent roles, 1-3 for older ones. Action verb + what was done + tool/method + result. Mirror the job's terminology where the profile supports it, in context rather than as lists. Never describe work that didn't happen, and never attach a job term to a real bullet to make it match ("reviewed pull requests with static analysis" when the profile says "reviewed pull requests").
+NUMBERS: only numbers from the MASTER_RESUME or CANDIDATE_ANSWERS, about the same thing. Never count the items of a list to make a metric ("2 LLM APIs", "3 AI coding tools", "across 4 AWS services", "1 large dataset"); no real number: describe the impact in words.
+BRACKETS: a bracket may only list things from the profile, e.g. "(OpenAI, Claude)". Never add a bracket that explains or justifies a skill ("(via Angular experience)", "(application security)") or appends a job keyword ("unit tests (QA)").
+No "Responsible for", "Worked on", "Helped". No keyword stuffing: a term appears where it is relevant, not repeated for density.
 
 PROJECTS: most relevant first; skip irrelevant ones when space is short. Education, certifications, languages: copy facts exactly.
 
@@ -202,7 +211,7 @@ Every statement must be traceable to the profile or to the candidate's SKILL_CON
 - Group A requirements (in the profile): use them in the job's exact wording, in Skills and in the bullets that prove them.
 - Group B requirements (clear equivalent): name the equivalent the candidate really used; write the job's term only if the candidate confirmed it as Strong or Basic. You may say "experience with Xero (similar to QuickBooks)" in a bullet only when that comparison is plainly true; never in Skills.
 - Confirmed "Strong": may be listed in Skills and mentioned in the summary; in a bullet only where that role really involved it according to the profile.
-- Confirmed "Basic": Skills only. Never as professional experience, years, or a bullet claim.
+- Confirmed "Basic": only on the "Working knowledge" skills line. Never as professional experience, years, or a bullet claim.
 - "Learning", "No" and unanswered requirements that are not in the profile: never in the resume. List them under report.gaps.
 - Never invent an employer, title, date, degree, certification, licence, project, tool, responsibility or metric. Never turn familiarity into professional experience, and never claim a skill just because the job asks for it. Preserve accuracy even when it lowers keyword match."""
 
@@ -221,9 +230,10 @@ _REPORT_RULES = """report (shown in the app, never exported):
 job_keywords: every requirement from the job analysis in the posting's wording, plus the job title without any gender marker.
 
 SELF-VERIFY before answering:
-- every claim traceable to the profile or a confirmation (per the evidence rules); no invented numbers
+- every claim traceable to the profile, the CANDIDATE_ANSWERS or a confirmation; nothing contradicts an answer; no number that isn't in the sources, no counted lists
+- availability is exactly the TARGET_SETTINGS availability_line; every profile link is in contact; no job-ad work areas in Skills
 - no duplicate employers; all relevant profile sections present; dates unchanged
-- no bracket hedges, no catch-all skill bucket, no duplicate skills, about 12-20 skills
+- no bracket hedges, no catch-all bucket except "Working knowledge" for Basic answers, no duplicate skills, every relevant profile skill kept
 - no inflated years; no gender marker in the headline; no keyword stuffing
 - fits TARGET_SETTINGS page_limit"""
 

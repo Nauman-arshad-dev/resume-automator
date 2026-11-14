@@ -123,6 +123,8 @@ def _settings_text(settings: dict | None) -> str:
     elif job_type == "Relocation":
         lines.append(f"relocation_to: {s.get('location') or 'the job location in the posting'}")
         lines.append(f"visa: {s.get('visa') or '(use that country usual skilled-work visa)'}")
+    if "availability_line" in s:
+        lines.append(f"availability_line: {s['availability_line'] or '(empty: local job)'}")
     lines.append(f"page_limit: {s.get('page_limit') or 2}")
     lines.append(f"content_mode: {content_mode(s)}")
     for key in ("must_include", "must_exclude"):
@@ -145,10 +147,19 @@ def _confirmations_text(confirmations: dict | None, mode: str = "Strict") -> str
     return "\n".join(f"- {c['skill']}: {c['level']}" for c in confirmations.values())
 
 
+def answers_text(answers: list[dict] | None) -> str:
+    """The candidate's saved answers about their own experience, for <candidate_answers>."""
+    pairs = [a for a in answers or [] if (a.get("answer") or "").strip()]
+    if not pairs:
+        return "(none)"
+    return "\n".join(f"- Q: {a.get('question', '').strip()}\n  A: {a['answer'].strip()}" for a in pairs)
+
+
 def _job_block(job_text: str, job_title: str, settings: dict | None, analysis: dict | None,
-               confirmations: dict | None) -> str:
+               confirmations: dict | None, answers: list[dict] | None = None) -> str:
     analysis_json = json.dumps(analysis, ensure_ascii=False, separators=(",", ":")) if analysis else "(not given)"
     return (
+        f"<candidate_answers>\n{answers_text(answers)}\n</candidate_answers>\n\n"
         f"<job_description>\n{job_text or '(not provided)'}\n</job_description>\n\n"
         f"{_title_block(job_title)}"
         f"<target_settings>\n{_settings_text(settings)}\n</target_settings>\n\n"
@@ -170,11 +181,13 @@ def analysis_request(master_resume: str, job_text: str, job_title: str = "") -> 
 
 
 def tailor_request(master_resume: str, job_text: str, job_title: str = "", settings: dict | None = None,
-                   analysis: dict | None = None, confirmations: dict | None = None) -> tuple[str, str]:
-    """(system prompt, user content) for step 2, the tailored resume — always built from the master."""
+                   analysis: dict | None = None, confirmations: dict | None = None,
+                   answers: list[dict] | None = None) -> tuple[str, str]:
+    """(system prompt, user content) for the tailored resume — always built from the master and the answers,
+    never from an earlier resume."""
     content = (
         f"<master_resume>\n{master_resume}\n</master_resume>\n\n"
-        f"{_job_block(job_text, job_title, settings, analysis, confirmations)}"
+        f"{_job_block(job_text, job_title, settings, analysis, confirmations, answers)}"
         "Tailor the resume for this job following the rules, then self-check it."
     )
     return tailor_prompt(content_mode(settings)), content
@@ -182,14 +195,15 @@ def tailor_request(master_resume: str, job_text: str, job_title: str = "", setti
 
 def revision_request(master_resume: str, job_text: str, resume: dict, ats_report: str, job_title: str = "",
                      settings: dict | None = None, analysis: dict | None = None,
-                     confirmations: dict | None = None, progress: str = "") -> tuple[str, str]:
+                     confirmations: dict | None = None, progress: str = "",
+                     answers: list[dict] | None = None) -> tuple[str, str]:
     """(system prompt, user content) for one ATS revision round. progress: e.g. "v1: 62, v2: 78"."""
     master = master_resume or "(not provided: treat the current resume as the source of facts)"
     current = json.dumps(resume, ensure_ascii=False, separators=(",", ":"))
     history = f"<score_history>{progress}</score_history>\n\n" if progress else ""
     content = (
         f"<master_resume>\n{master}\n</master_resume>\n\n"
-        f"{_job_block(job_text, job_title, settings, analysis, confirmations)}"
+        f"{_job_block(job_text, job_title, settings, analysis, confirmations, answers)}"
         f"<current_resume>\n{current}\n</current_resume>\n\n"
         f"<ats_report>\n{ats_report}\n</ats_report>\n\n"
         f"{history}"

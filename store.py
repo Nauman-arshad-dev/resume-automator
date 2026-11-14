@@ -5,6 +5,7 @@ Local storage for job applications and master-profile history (all git-ignored, 
     data/applications/<id>/resume.pdf|.docx   the exact files of the saved version
     data/profile_history/<timestamp>.txt      earlier versions of the master profile (last 20)
     data/workspace.json                        the job in progress, restored after a browser refresh
+    data/profile_answers.json                  your answers about your own experience (override the profile)
 
 A saved application never changes the master profile, and saving the profile never
 changes an application: each application keeps its own copy of what was used.
@@ -182,3 +183,44 @@ def _json_safe(value) -> bool:
     except (TypeError, ValueError):
         return False
     return True
+
+
+# --------------------------------------------------------------------------- #
+# Saved answers: facts the candidate gave about their own experience
+# --------------------------------------------------------------------------- #
+
+ANSWERS = "profile_answers.json"
+
+
+def load_answers(base: Path) -> list[dict]:
+    """[{question, answer, saved}] — kept across jobs (New job), cleared by Reset."""
+    try:
+        data = json.loads((Path(base) / ANSWERS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [a for a in data if isinstance(a, dict) and str(a.get("answer", "")).strip()] if isinstance(data, list) else []
+
+
+def save_answers(base: Path, answers: list[dict]) -> None:
+    path = Path(base) / ANSWERS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(answers, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def add_answers(base: Path, new: list[tuple[str, str]]) -> list[dict]:
+    """Add or update answers (same question: the newer answer wins). Returns the full list."""
+    answers = load_answers(base)
+    for question, answer in new:
+        if not answer.strip():
+            continue
+        same = next((a for a in answers if a.get("question", "").strip().lower() == question.strip().lower()), None)
+        if same:
+            same.update(answer=answer.strip(), saved=_now())
+        else:
+            answers.append({"question": question.strip(), "answer": answer.strip(), "saved": _now()})
+    save_answers(base, answers)
+    return answers
+
+
+def clear_answers(base: Path) -> None:
+    (Path(base) / ANSWERS).unlink(missing_ok=True)
