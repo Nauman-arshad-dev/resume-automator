@@ -1132,7 +1132,8 @@ vs = versions()
 current = vs[-1]
 result = current["result"]
 # The location line always follows the current job type, even if it changed after the build
-resume = {**result["resume"], "availability": guard.availability_line(target_settings, analysis)}
+resume = guard.with_links({**result["resume"], "availability": guard.availability_line(target_settings, analysis)},
+                          master_clean)  # a link added to the profile after the build shows up too
 resume_json = as_json(resume)
 ats_title = guard.real_title(title)
 job_keywords = [k for k in st.session_state.get("job_keywords", []) if guard.is_skill(k) or k == ats_title]

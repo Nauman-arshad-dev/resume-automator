@@ -836,3 +836,10 @@ def new_words(text: str, sources: str) -> list[tuple[str, bool]]:
         toks = evidence.tokens(core)
         out.append((word, bool(toks) and not toks <= src_tokens))
     return out
+
+
+def with_links(resume: dict, master: str) -> dict:
+    """The resume with every profile link in its contact line (e.g. a GitHub link added after the build)."""
+    have = {_link_key(m.group(0)) for c in resume["contact"] for m in LINK.finditer(c)}
+    added = [ln for ln in master_links(master) if _link_key(ln) not in have]
+    return {**resume, "contact": list(resume["contact"]) + added} if added else resume
