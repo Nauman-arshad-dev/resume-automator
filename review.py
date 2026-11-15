@@ -24,7 +24,7 @@ import main
 import render
 
 HEADLINE_MAX = 95
-SKILLS_MAX = 30
+SKILLS_MAX = 45
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 # A bracket that explains or hedges a skill: "(via strong AWS experience)", "(basics)", "(learning)"...
 HEDGE = re.compile(r"\s*\((?=[^)]*\b(?:via|basics?|learning|familiar|exposure|equivalent|similar|transferable|"

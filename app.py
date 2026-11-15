@@ -362,9 +362,9 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict, sourc
     discarded = ""
     with st.status(f"🚀 {source}: improving your resume…", expanded=True) as status:
         for n in range(1, max_rounds + 1):
-            keywords_json = json.dumps(st.session_state.get("job_keywords", []))
+            keywords_json = json.dumps([k for k in st.session_state.get("job_keywords", []) if guard.is_skill(k) or k == ctx["ats_title"]])
             resume = versions()[-1]["result"]["resume"]
-            before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"],
+            before = ats_check(as_json(resume), *view, keywords_json, ctx["ats_title"], ctx["job_text"],
                                ctx["page_limit"])
             serious = blocking(resume, ctx)
             thin = [i for i in checks_for(resume, ctx) if quality.SKILLS_ONLY in i.message]
@@ -393,10 +393,10 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict, sourc
                 merged = list(dict.fromkeys(st.session_state.get("job_keywords", []) + new["job_keywords"]))
                 st.session_state["job_keywords"] = merged
                 keywords_json = json.dumps(merged)
-                before = ats_check(as_json(resume), *view, keywords_json, ctx["job_title"], ctx["job_text"],
+                before = ats_check(as_json(resume), *view, keywords_json, ctx["ats_title"], ctx["job_text"],
                                    ctx["page_limit"])
             new = polish(new, ctx)
-            after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["job_title"], ctx["job_text"],
+            after = ats_check(as_json(new["resume"]), *view, keywords_json, ctx["ats_title"], ctx["job_text"],
                               ctx["page_limit"])
             fixed_serious = len(serious) > len(blocking(new["resume"], ctx))
             if after.score < before.score and not first_with_input and not fixed_serious:
@@ -953,7 +953,8 @@ def remember_master() -> None:
 
 
 fingerprint = job_fingerprint(master, job_text, job_title)
-analysis = st.session_state.get("analysis") if st.session_state.get("analysis_for") == fingerprint else None
+analysis = guard.split_requirements(st.session_state["analysis"]) if st.session_state.get("analysis") and \
+    st.session_state.get("analysis_for") == fingerprint else None  # re-filtered: older analyses had job-ad text
 
 
 def store_analysis(result: dict) -> None:
@@ -999,9 +1000,9 @@ def make_ctx(confirmations: dict) -> dict:
     settings_now = {**target_settings, "page_limit": page_limit,
                     "availability_line": guard.availability_line(target_settings, analysis)}
     return {"page_limit": page_limit, "template": template, "accent": accent, "page": page, "font": font,
-            "size": size, "job_title": title, "master": master_clean, "job_text": job_text,
+            "size": size, "job_title": title, "ats_title": guard.real_title(title), "master": master_clean, "job_text": job_text,
             "settings": settings_now, "analysis": analysis, "confirmations": confirmations,
-            "job_skills": job_skills, "keywords": list(dict.fromkeys(job_skills + ([title] if title else []))),
+            "job_skills": job_skills, "keywords": list(dict.fromkeys(job_skills + ([guard.real_title(title)] if guard.real_title(title) else []))),
             "target": st.session_state.get("target", 95), "max_rounds": st.session_state.get("max_rounds", 3),
             "answers": store.load_answers(DATA_DIR) if remember else st.session_state.get("answers_mem", [])}
 
@@ -1133,7 +1134,8 @@ result = current["result"]
 # The location line always follows the current job type, even if it changed after the build
 resume = {**result["resume"], "availability": guard.availability_line(target_settings, analysis)}
 resume_json = as_json(resume)
-job_keywords = st.session_state.get("job_keywords", [])
+ats_title = guard.real_title(title)
+job_keywords = [k for k in st.session_state.get("job_keywords", []) if guard.is_skill(k) or k == ats_title]
 filename = main.safe_filename(st.session_state.get("filename", "")) or "resume"
 page_limit = ctx["page_limit"]
 job_skills = ctx["job_skills"]
@@ -1141,7 +1143,7 @@ job_skills = ctx["job_skills"]
 try:
     with st.spinner("Rendering and checking…"):
         pdf_bytes, docx_bytes, pages = make_files(resume_json, *look)
-        report = ats_check(resume_json, *look, json.dumps(job_keywords), title, job_text, page_limit)
+        report = ats_check(resume_json, *look, json.dumps(job_keywords), ats_title, job_text, page_limit)
 except render.RenderError as e:
     st.error(str(e))
     st.stop()

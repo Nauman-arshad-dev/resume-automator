@@ -29,6 +29,7 @@ import render
 SERIOUS, WARNING = "serious", "warning"
 HEADLINE_MAX = 95
 SKILLS_MAX = 36  # restored profile skills stop here; job-mentioned ones first
+SKILLS_LIMIT = 45  # more than this is hard to read: the least relevant are left out
 CHECK_NAMES = {
     1: "Location line matches this job",
     2: "Skills come from your profile or your answers",
@@ -134,11 +135,22 @@ WORK_MODELS = {"remote", "hybrid", "on-site", "onsite", "on site", "full-time", 
                "part time", "contract", "freelance", "permanent", "relocation", "remote work"}
 
 
+WORK_MODEL_PHRASE = re.compile(r"\b(?:remote|hybrid|on-?site|full-time|part-time)\s+(?:\w+\s+)?"
+                               r"(?:work|contract|position|role|job|opportunit\w*)\b|\b(?:contract|freelance)\s+work\b",
+                               re.I)
+
+
 def is_skill(term: str) -> bool:
     """False for a job ad's work areas, departments, job families, job titles, work models and hiring steps."""
     t = term.strip().lower()
     return bool(t) and t not in JOB_FAMILIES and t not in WORK_MODELS and not NOT_A_SKILL.search(t) \
-        and not JOB_TITLE.search(t) and not WHO_OR_WHERE.search(t)
+        and not JOB_TITLE.search(t) and not WHO_OR_WHERE.search(t) and not WORK_MODEL_PHRASE.search(t)
+
+
+def real_title(title: str) -> str:
+    """The title when it names a role ("Senior Java Developer"); "" for "Talent Pool (General Application)"."""
+    core = re.sub(r"\s*\(.*?\)", "", title or "").strip()
+    return title if core and JOB_TITLE.search(core) else ""
 
 
 def split_requirements(analysis: dict) -> dict:
@@ -399,6 +411,9 @@ def _is_count(number: str) -> bool:
 # 7. Job-ad tags, bracket explanations, the headline
 # --------------------------------------------------------------------------- #
 
+APPLICATION_PITCH = re.compile(r"\b(?:applying|apply|application)\s+(?:to|for)\b|\bseeking\s+(?:a|an|the|to)\b|"
+                               r"\blooking\s+(?:for|to\s+join)\b|\binterested\s+in\s+(?:joining|the)\b|"
+                               r"\beager\s+to\s+(?:join|contribute)\b", re.I)
 BUCKET_LABELS = ("working knowledge", "familiar with", "basics", "basic", "currently learning", "learning",
                  "exposure", "other", "additional", "additional skills")
 WORK_MODEL = re.compile(r"^\s*(?:remote|hybrid|on-?site|onsite|fully remote)\s+", re.I)
@@ -457,7 +472,15 @@ def clean_headline(headline: str, master: str, confirmations: dict, master_norm:
 # --------------------------------------------------------------------------- #
 
 def _skill_groups(resume: dict) -> list[dict]:
-    return [{"label": g["label"], "items": list(g["items"])} for g in render._skill_groups(resume["skills"])]
+    """Skill lines as groups; an item like "Amazon Web Services (AWS): EC2" becomes "Amazon Web Services (AWS)",
+    "EC2"."""
+    groups = []
+    for g in render._skill_groups(resume["skills"]):
+        items = []
+        for item in g["items"]:
+            items += [p.strip() for p in item.split(":") if p.strip()] if ":" in item else [item]
+        groups.append({"label": g["label"], "items": items})
+    return groups
 
 
 def _write_groups(groups: list[dict]) -> list[str]:
@@ -502,6 +525,10 @@ def enforce(resume: dict, master: str, answers: list[dict] | None, confirmations
     # 7. Brackets and job-ad tags in the summary, bullets and skills; a real, short headline
     removed_brackets: list[str] = []
     r["summary"] = WORK_MODEL.sub("", r["summary"])  # "Remote Full Stack Developer with..." -> "Full Stack..."
+    pitch = [s for s in re.split(r"(?<=[.!?])\s+", r["summary"]) if APPLICATION_PITCH.search(s)]
+    if pitch:  # "Applying to the G2i Talent Pool for remote work." belongs in a cover letter
+        r["summary"] = " ".join(s for s in re.split(r"(?<=[.!?])\s+", r["summary"]) if s not in pitch)
+        notes.append("Summary: removed \"" + pitch[0].strip() + "\" (cover-letter wording, not resume content).")
     r["summary"], gone = clean_brackets(r["summary"], master_norm)
     removed_brackets += gone
     for _, bullets in _sections(r):
@@ -597,6 +624,31 @@ def enforce(resume: dict, master: str, answers: list[dict] | None, confirmations
         restored.append(item)
     if restored:
         notes.append("Skills: kept your relevant profile skills: " + ", ".join(restored) + ".")
+
+    # Too many to read (70+): drop the ones neither the job nor the resume's own bullets mention, from the
+    # end of the longest categories (the profile lists its most important skills first)
+    trimmed = []
+    total = sum(len(g["items"]) for g in groups)
+    master_rank = {}  # how far down its profile category a skill is listed (the profile's own priority)
+    for category, item, rank_in_category, *_ in seen_items:
+        master_rank.setdefault(item.lower(), rank_in_category)
+        master_rank.setdefault(re.sub(r"\s*\(.*?\)", "", item).strip().lower(), rank_in_category)
+    def drop_score(item: str) -> float:  # higher = left out first
+        rank = master_rank.get(item.lower(), master_rank.get(re.sub(r"\s*\(.*?\)", "", item).strip().lower(), 20))
+        return rank - (2 if evidence.mentions(body, item) else 0)
+
+    while total > SKILLS_LIMIT:
+        spare = [(drop_score(i), len(g["items"]), g, i)
+                 for g in groups if g["label"].lower() != "working knowledge"
+                 for i in g["items"] if not (job_text and evidence.mentions(job_text, i))]
+        if not spare:
+            break
+        *_, g, item = max(spare, key=lambda x: (x[0], x[1]))
+        g["items"].remove(item)
+        trimmed.append(item)
+        total -= 1
+    if trimmed:
+        notes.append(f"Skills: kept the {SKILLS_LIMIT} most relevant; left out " + ", ".join(trimmed) + ".")
     r["skills"] = _write_groups(groups)
 
     # 4. Saved answers override the profile

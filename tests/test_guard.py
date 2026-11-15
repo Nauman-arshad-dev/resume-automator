@@ -228,6 +228,14 @@ class TestAcceptance(unittest.TestCase):
             self.assertNotIn(bad, skills)
         self.assertIn("Spring Boot", skills)
 
+    def test_no_application_pitch_and_no_fake_title(self):
+        r, notes = run(claude_like(summary="Full Stack Developer with 5+ years in Java. Applying to the G2i "
+                                           "Talent Pool for remote, project-based work."))
+        self.assertNotIn("Applying", r["summary"])
+        self.assertEqual(guard.real_title("Talent Pool (General Application)"), "")
+        self.assertEqual(guard.real_title("Senior Java Developer"), "Senior Java Developer")
+        self.assertFalse(guard.is_skill("remote contract work"))
+
     def test_new_words_marks_only_what_is_not_in_the_sources(self):
         marks = dict(guard.new_words("Designed the PostgreSQL schema using GraphQL", MASTER))
         self.assertFalse(marks["PostgreSQL"])
