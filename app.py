@@ -1155,6 +1155,8 @@ fit = match.job_match(resume, analysis, title, job_keywords, master_clean, confi
 fit_master = match.job_match({**main.normalize({}, main.RESUME_SCHEMA), "summary": master_clean}, analysis, title,
                              job_keywords)
 issues = checks_for(resume, ctx, len(pages))
+match_scored = len(job_skills) >= 3  # a talent-pool post with no real skills: a score would mislead
+match_label = f"{fit.overall}/100" if match_scored else "n/a (no specific skills in this post)"
 approved = set(st.session_state.get("approved", []))
 unresolved = [i for i in issues if i.severity == guard.SERIOUS and i.id not in approved]
 serious = [i for i in issues if i.severity == guard.SERIOUS]
@@ -1184,9 +1186,12 @@ def ready_box(key: str) -> None:
         before, after = info["score_before"], info["score_after"]
         st.success(f"✅ **{info['source']}: version {info['version']} is ready.** Built-in ATS score "
                    + (f"{before} → **{after}**" if before is not None else f"**{after}**") + "/100. "
-                   "Download it and check it in your own ATS checker.")
+                   + ("Use the download button below." if key == "top" else
+                      "Download it and check it in your own ATS checker."))
         st.markdown("**What changed** (vs version " + str(info["from_version"]) + "):\n"
                     + "\n".join(f"- {md(c)}" for c in info["changes"]))
+        if key == "top":  # step 4 has its own download and undo buttons right below: no duplicates
+            return
         dl, back = st.columns(2)
         dl.download_button(f"⬇️ Download version {len(vs)} (PDF)", pdf_bytes, f"{filename}.pdf",
                            mime="application/pdf", type="primary", width="stretch", disabled=not gate_ok,
@@ -1241,7 +1246,7 @@ with step(4, "Check & download", "Every line is checked against your profile and
                              disabled=not gate_ok)
     if len(vs) > 1:
         undo_col.button(f"↩️ Undo (back to v{len(vs) - 1})", on_click=undo, width="stretch")
-    st.caption(f"ATS score {report.score}/100 · job match {fit.overall}/100 · {report.words} words · "
+    st.caption(f"ATS score {report.score}/100 · job match {match_label} · {report.words} words · "
                f"{len(pages)} page{'s' if len(pages) != 1 else ''} · version {len(vs)}. Scores are this app's own "
                "estimates, not an employer's result.")
 
@@ -1300,10 +1305,15 @@ with tab_report:
         st.markdown("**Suggestions**")
         st.markdown("\n".join(f"- ⚠️ {md(i.message)}" for i in warnings))
     st.markdown("**🎯 Job match**")
-    cols = st.columns(len(fit.coverage) + 1)
-    cols[0].metric("Overall estimate", f"{fit.overall}/100", delta=f"{fit.overall - fit_master.overall:+d} vs profile",
-                   help="Weighted by importance; title counts 15%. " + f"Exact-wording keyword match: {match_after}% "
-                        f"(profile: {match_before}%).")
+    if not match_scored:
+        st.info("This post lists fewer than 3 concrete skills (e.g. a talent pool or general application), so a job "
+                "match score would mean nothing. Your resume shows your strongest real skills instead.")
+    cols = st.columns(len(fit.coverage) + 1) if match_scored else []
+    if cols:
+        cols[0].metric("Overall estimate", f"{fit.overall}/100",
+                       delta=f"{fit.overall - fit_master.overall:+d} vs profile",
+                       help="Weighted by importance; title counts 15%. " + f"Exact-wording keyword match: "
+                            f"{match_after}% (profile: {match_before}%).")
     for col, (cat, pct) in zip(cols[1:], fit.coverage.items()):
         found, total = fit.counts[cat]
         col.metric(f"{match.CATEGORY_LABEL[cat]} requirements", f"{found}/{total}", help=f"{pct}% by weight")

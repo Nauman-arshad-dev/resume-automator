@@ -115,7 +115,8 @@ def clean_master(master: str) -> tuple[str, list[str]]:
 NOT_A_SKILL = re.compile(
     r"\b(assessments?|interviews?|hiring|recruit\w*|onboarding|talent pool|community|department|"
     r"training data|frontier models?|rl environments?|work areas?|our (?:team|clients|customers)|"
-    r"take-home|screening|application process|fresh graduates?|job seekers?)\b",
+    r"take-home|screening|application process|fresh graduates?|job seekers?|(?:project|client|talent|job) matching|starting out|"
+    r"experienced or|entry or|any level|all levels)\b",
     re.IGNORECASE)
 JOB_FAMILIES = {
     "software", "data", "design", "product", "security", "infrastructure", "qa", "engineering", "development",
@@ -756,7 +757,8 @@ def checks(resume: dict, master: str, answers: list[dict] | None, confirmations:
     body = " ".join(t for _, t in body_texts(resume))
     missing = [i for _, i in master_skills(master) if is_skill(i) and evidence.mentions(body, i)
                and not evidence.mentions(listed, i)]
-    if missing:
+    listed_count = sum(len(g["items"]) for g in render._skill_groups(resume["skills"]))
+    if missing and listed_count < SKILLS_LIMIT:  # at the limit, leaving some out is deliberate
         items.append(Item(3, WARNING, "Profile skills your bullets use but Skills doesn't list: "
                           + ", ".join(dict.fromkeys(missing)) + "."))
 
