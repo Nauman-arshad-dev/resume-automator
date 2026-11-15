@@ -219,6 +219,15 @@ class TestAcceptance(unittest.TestCase):
         fixed = guard.apply_fix(raw, number_item)
         self.assertIn("Integrated LLM APIs (OpenAI, Claude)", str(fixed))
 
+    def test_job_titles_and_work_models_never_become_skills(self):
+        r, _ = run(claude_like(skills=["Backend: Java, Spring Boot",
+                                       "Tools & Technologies: Full Stack Developer, Full Stack Software Engineer, "
+                                       "remote, AI labs, real projects"]))
+        skills = " | ".join(r["skills"])
+        for bad in ("Full Stack Developer", "Software Engineer", "remote", "AI labs", "real projects"):
+            self.assertNotIn(bad, skills)
+        self.assertIn("Spring Boot", skills)
+
     def test_new_words_marks_only_what_is_not_in_the_sources(self):
         marks = dict(guard.new_words("Designed the PostgreSQL schema using GraphQL", MASTER))
         self.assertFalse(marks["PostgreSQL"])

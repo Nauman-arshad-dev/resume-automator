@@ -92,7 +92,8 @@ TIPS = """**Make it readable by software first.** A person only sees your resume
 **Write bullets that prove results.** Duties say what the job was; bullets show what you achieved.
 - Action verb + what you did + technology + result: "Reduced page load time by 35% by splitting bundles \
 and lazy loading images."
-- Cut "responsible for" and "worked on". Start with Built, Led, Automated, Launched.
+- Cut "responsible for" and "worked on". Start with Built, Led, Automated, Delivered.
+- Past roles in the past tense; your current role in the present tense, the same throughout.
 - Real numbers only. No real number? Describe the impact in words.
 - 3 to 6 bullets per role, most relevant first."""
 
@@ -194,7 +195,8 @@ def start_versions(result: dict, note: str, role: str, keywords: list[str]) -> N
     st.session_state.pop("cover_letter", None)  # it belonged to the previous build
     st.session_state.pop("recruiter", None)
     # Keep the job's keywords fixed across versions so scores stay comparable
-    st.session_state["job_keywords"] = keywords or result["job_keywords"]
+    fallback = [k for k in result["job_keywords"] if guard.is_skill(k)] + ([role] if role else [])
+    st.session_state["job_keywords"] = keywords or list(dict.fromkeys(fallback))
     st.session_state["filename"] = main.output_stem(result["resume"], role)  # Firstname-Lastname-Role
 
 
@@ -314,13 +316,51 @@ def build_resume(ctx: dict) -> None:
     if out:
         start_versions(polish(out[0], ctx), f"Built · {out[1]}", ctx["job_title"], ctx["keywords"])
         remember_master()
-        auto_improve(ctx["target"], ctx["max_rounds"], "", ctx)  # reruns the page when done
+        auto_improve(ctx["target"], ctx["max_rounds"], "", ctx, source="Build")  # reruns the page when done
 
 
-def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> None:
-    """Check → revise → re-check until the target score, no further gain, or max_rounds."""
+def version_changes(old: dict, new: dict) -> list[str]:
+    """What a new version changed, in plain words; content loss is marked ⚠️ so it can be undone."""
+    out = []
+    if old["headline"] != new["headline"]:
+        out.append(f"Headline: \"{new['headline']}\"")
+    if old["summary"] != new["summary"]:
+        out.append("Summary rewritten")
+    old_jobs = {j["company"] or j["title"]: j["bullets"] for j in old["experience"]}
+    for j in new["experience"]:
+        name, before, after = j["company"] or j["title"], old_jobs.get(j["company"] or j["title"], []), j["bullets"]
+        changed = sum(b not in before for b in after)
+        if len(after) < len(before):
+            loss = len(before) - len(after)
+            out.append(f"{'⚠️ ' if loss >= 2 or len(after) == 1 else ''}{name}: {len(before)} → {len(after)} bullets"
+                       + (" (useful experience may be gone: Undo if so)" if loss >= 2 or len(after) == 1 else ""))
+        elif changed:
+            out.append(f"{name}: {changed} bullet{'s' if changed != 1 else ''} reworded")
+    old_skills = {i.lower() for _, i in review.skill_items(old)}
+    new_skills = {i.lower() for _, i in review.skill_items(new)}
+    if added := [i for _, i in review.skill_items(new) if i.lower() not in old_skills]:
+        out.append("Skills added: " + ", ".join(added))
+    if removed := [i for _, i in review.skill_items(old) if i.lower() not in new_skills]:
+        out.append("Skills removed: " + ", ".join(removed))
+    old_projects = {p["name"]: p["bullets"] for p in old["projects"]}
+    if [p["name"] for p in old["projects"]] != [p["name"] for p in new["projects"]]:
+        out.append("Projects: " + (", ".join(p["name"].split(":")[0] for p in new["projects"]) or "none"))
+    elif any(p["bullets"] != old_projects.get(p["name"]) for p in new["projects"]):
+        out.append("Project bullets reworded")
+    return out or ["Small wording changes"]
+
+
+def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict, source: str = "Auto-improve") -> None:
+    """Check → revise → re-check until the target score, no further gain, or max_rounds.
+
+    source names the version ("Auto-improve", "Recruiter improvements", "Resume tips", "Review fixes"), and
+    the result is announced wherever the user is: a toast, and a "version N is ready" box with a download."""
     view = (ctx["template"], ctx["accent"], ctx["page"], ctx["font"], ctx["size"])
-    with st.status("🚀 Improving your resume…", expanded=True) as status:
+    start_count = len(versions())
+    start_resume = versions()[-1]["result"]["resume"]
+    start_score = versions()[-1]["score"]
+    discarded = ""
+    with st.status(f"🚀 {source}: improving your resume…", expanded=True) as status:
         for n in range(1, max_rounds + 1):
             keywords_json = json.dumps(st.session_state.get("job_keywords", []))
             resume = versions()[-1]["result"]["resume"]
@@ -360,9 +400,10 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> No
                               ctx["page_limit"])
             fixed_serious = len(serious) > len(blocking(new["resume"], ctx))
             if after.score < before.score and not first_with_input and not fixed_serious:
-                status.write(f"Round {n} would lower the score ({before.score} → {after.score}), so it was discarded.")
+                discarded = f"Claude's changes would have lowered the ATS score ({before.score} → {after.score})"
+                status.write(f"Round {n}: {discarded}, so they were discarded.")
                 break
-            add_version(new, f"Auto-improve round {n} · {usage}", after.score)
+            add_version(new, f"{source}" + (f" round {n}" if max_rounds > 1 else "") + f" · {usage}", after.score)
             status.write(f"✅ Version {len(versions())}: {before.score} → **{after.score}**")
             if after.score >= target:
                 break
@@ -373,7 +414,17 @@ def auto_improve(target: int, max_rounds: int, ext_report: str, ctx: dict) -> No
         final = versions()[-1]["score"]
         status.update(label=f"Done — ATS score {final}/100 (version {len(versions())})", state="complete",
                       expanded=False)
-    st.session_state["notice"] = f"Your resume is ready: ATS score {final}/100 (version {len(versions())})."
+    if len(versions()) > start_count:
+        st.session_state["just_improved"] = {
+            "version": len(versions()), "source": source, "from_version": start_count,
+            "score_before": start_score, "score_after": final,
+            "changes": version_changes(start_resume, versions()[-1]["result"]["resume"])}
+        st.session_state["toast"] = f"✅ {source}: version {len(versions())} is ready to download (ATS {final}/100)."
+    elif start_count:
+        st.session_state["just_improved"] = {"version": start_count, "source": source, "unchanged": True,
+                                             "reason": discarded or "it already meets your target, with nothing "
+                                                                    "left to fix truthfully"}
+        st.session_state["toast"] = f"ℹ️ {source}: no new version; version {start_count} stays."
     st.rerun()
 
 
@@ -623,6 +674,8 @@ st.caption("Paste a job and click **Create**. Your resume is written only from y
 tracker = st.empty()  # filled once every step's state is known
 if notice := st.session_state.pop("notice_top", None):
     st.info(notice)
+if toast := st.session_state.pop("toast", None):
+    st.toast(toast)
 
 STEPS = ("Your profile", "The job", "Questions", "Check & download")
 
@@ -1115,6 +1168,34 @@ def remove_item(item: guard.Item) -> None:
                 f"Removed: {item.value[:60]}")
 
 
+def ready_box(key: str) -> None:
+    """After any improvement: which version is new, the score, what changed, and its download — shown wherever
+    the user clicked (step 4, the Improve tab, the Recruiter tab)."""
+    info = st.session_state.get("just_improved")
+    if not info or info["version"] != len(vs):
+        return
+    with st.container(border=True):
+        if info.get("unchanged"):
+            st.info(f"**{info['source']}: no new version.** Version {info['version']} stays, because "
+                    f"{info['reason']}.")
+            return
+        before, after = info["score_before"], info["score_after"]
+        st.success(f"✅ **{info['source']}: version {info['version']} is ready.** Built-in ATS score "
+                   + (f"{before} → **{after}**" if before is not None else f"**{after}**") + "/100. "
+                   "Download it and check it in your own ATS checker.")
+        st.markdown("**What changed** (vs version " + str(info["from_version"]) + "):\n"
+                    + "\n".join(f"- {md(c)}" for c in info["changes"]))
+        dl, back = st.columns(2)
+        dl.download_button(f"⬇️ Download version {len(vs)} (PDF)", pdf_bytes, f"{filename}.pdf",
+                           mime="application/pdf", type="primary", width="stretch", disabled=not gate_ok,
+                           key=f"dl_ready_{key}")
+        if len(vs) > 1:
+            back.button(f"↩️ Undo: back to version {len(vs) - 1}", on_click=undo, width="stretch",
+                        key=f"undo_ready_{key}")
+        if not gate_ok:
+            st.caption("The download unlocks after you fix or keep the flagged items in step 4.")
+
+
 def md(text: str) -> str:
     """Plain text safe inside Streamlit markdown."""
     return re.sub(r"([\\`*_{}\[\]<>#|~$])", r"\\\1", text)
@@ -1124,6 +1205,7 @@ with step(4, "Check & download", "Every line is checked against your profile and
                                  "(7 checks). Fix or keep anything flagged, then download."):
     if notice := st.session_state.pop("notice", None):
         st.success(notice)
+    ready_box("top")
     if unresolved:
         st.error(f"**{len(unresolved)} thing{'s' if len(unresolved) != 1 else ''} to check before you download.** "
                  "Remove it, or keep it if it's true.")
@@ -1141,7 +1223,7 @@ with step(4, "Check & download", "Every line is checked against your profile and
                                 width="stretch")
         if engine != ENGINE_MANUAL and st.button("🤖 Ask Claude to fix them all", width="stretch"):
             auto_improve(100, 1, "Fix these review findings:\n" + "\n".join(
-                f"- {i.message} {i.text}" for i in unresolved), ctx)
+                f"- {i.message} {i.text}" for i in unresolved), ctx, source="Review fixes")
     else:
         passed = sorted({i.check for i in serious})
         st.success("✅ **Ready to send.** " + " · ".join(
@@ -1251,6 +1333,7 @@ with tab_report:
 # Tab: Improve
 # --------------------------------------------------------------------------- #
 with tab_improve:
+    ready_box("improve")
     checklist_col, keywords_col = st.columns([1.1, 1], gap="large")
     with checklist_col:
         for group in ("Structure", "Content", "Job match"):
@@ -1267,6 +1350,16 @@ with tab_improve:
                                 unsafe_allow_html=True)
         with st.expander("📋 Resume tips"):
             st.markdown(TIPS)
+        if engine != ENGINE_MANUAL and st.button(
+                "✨ Apply the resume tips to my resume", width="stretch",
+                help="Claude revises this version to follow the tips and fix the ❌ checks above, using only facts "
+                     "from your profile and answers. You get a new version and can undo it."):
+            failing = [c for c in report.checks if not c.ok]
+            notes = ("Apply these resume tips wherever this resume doesn't follow them yet. Use only facts from the "
+                     "master resume and the candidate answers; keep every relevant bullet.\n" + TIPS
+                     + ("\n\nChecks this version fails:\n" + "\n".join(f"- {c.name}: {c.detail} Fix: {c.fix}"
+                                                                    for c in failing) if failing else ""))
+            auto_improve(100, 1, notes, ctx, source="Resume tips")
         if not meta["ats"]:
             st.warning(f"**{meta['label']}** is a design-focused template; for ATS checks switch to an "
                        "✅ ATS-friendly one in *Download & design*.")
@@ -1342,6 +1435,7 @@ with tab_improve:
 # Tab: Recruiter view (simulated recruiter + hiring manager)
 # --------------------------------------------------------------------------- #
 with tab_recruiter:
+    ready_box("recruiter")
     st.caption("A simulated recruiter and hiring manager read this version for this job. It's a second opinion "
                "to improve the resume, not an employer's decision.")
     rec = st.session_state.get("recruiter")
@@ -1391,7 +1485,7 @@ with tab_recruiter:
                               "fact is skipped and listed as a gap."):
                 notes = "Recruiter review notes:\n" + "\n".join(f"- {x}" for x in r["improvements"] +
                                                                   r["language_issues"])
-                auto_improve(100, 1, notes, ctx)
+                auto_improve(100, 1, notes, ctx, source="Recruiter improvements")
 
 # --------------------------------------------------------------------------- #
 # Tab: Design & download

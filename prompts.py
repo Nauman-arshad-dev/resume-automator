@@ -197,12 +197,12 @@ HEADER:
 
 SUMMARY: 2-4 sentences, confident and human: "<Title family> with <N>+ years ..." where N = floor of the span from the earliest dated role to today (never more; never claim years for a single tool unless the profile shows that span for it). Name the most relevant verified skills plainly, the strongest relevant achievement and two or three matching strengths. No buzzwords, no first-person pronouns, no copied sentences from the job. Entry-level candidates: lead with education, projects or internships instead of years.
 
-EXPERIENCE BULLETS: most job-relevant first, 3-6 for recent roles, 1-3 for older ones. Action verb + what was done + tool/method + result. Mirror the job's terminology where the profile supports it, in context rather than as lists. Never describe work that didn't happen, and never attach a job term to a real bullet to make it match ("reviewed pull requests with static analysis" when the profile says "reviewed pull requests").
+EXPERIENCE BULLETS: most job-relevant first, 3-6 for recent roles, 1-3 for older ones. Action verb + what was done + tool/method + result. Mirror the job's terminology where the profile supports it, in context rather than as lists. Never describe work that didn't happen, and never attach a job term to a real bullet to make it match ("reviewed pull requests with static analysis" when the profile says "reviewed pull requests"). Tense: past roles in the past tense; the current role in the present tense; never mix tenses within one role or one bullet.
 NUMBERS: only numbers from the MASTER_RESUME or CANDIDATE_ANSWERS, about the same thing. Never count the items of a list to make a metric ("2 LLM APIs", "3 AI coding tools", "across 4 AWS services", "1 large dataset"); no real number: describe the impact in words.
 BRACKETS: a bracket may only list things from the profile, e.g. "(OpenAI, Claude)". Never add a bracket that explains or justifies a skill ("(via Angular experience)", "(application security)") or appends a job keyword ("unit tests (QA)").
 No "Responsible for", "Worked on", "Helped". No keyword stuffing: a term appears where it is relevant, not repeated for density.
 
-PROJECTS: most relevant first; skip irrelevant ones when space is short. Education, certifications, languages: copy facts exactly.
+PROJECTS: most relevant first; skip irrelevant ones when space is short. A project bullet must add something the experience bullets don't already say; never repeat an experience bullet as a project. Education, certifications, languages: copy facts exactly.
 
 Apply TARGET_SETTINGS must_include items and never include must_exclude items."""
 
@@ -280,6 +280,7 @@ Revision rules:
 - A reviewer's or recruiter's notes (e.g. "remove the brackets", "skill listed twice", "make the impact clearer", "page 3 only has Education") are fixes to apply, unless one would require inventing a fact: then leave it and mention it under report.gaps.
 - Ignore checks about headings, columns, tables, fonts or file format: the app's templates handle those. If a report names a job title that is a parsing mistake (e.g. "About the Role"), use the real title.
 - Too few bullets with numbers: use only numbers that are in the master resume; never invent them.
+- Applying a note never means deleting relevant experience: keep each role's job-relevant bullets (a role that had 3-4 bullets keeps them). Shorten only when the page limit requires it, by cutting the least relevant bullets of the oldest roles first.
 - Keep everything the report does not flag. If score_history shows the score dropped after the last round, undo that kind of change.
 
 The tailoring rules still apply:

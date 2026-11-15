@@ -78,6 +78,26 @@ def duplicate_bullets(resume: dict, threshold: float = 0.75) -> list[Issue]:
     return issues
 
 
+_PAST_IRREGULAR = ("built", "led", "wrote", "ran", "made", "drove", "grew", "won", "took", "gave", "set", "cut",
+                   "put", "sold", "brought", "taught", "held", "kept", "found", "began", "chose", "spoke", "oversaw",
+                   "became", "rebuilt", "rewrote", "shipped", "met", "saw", "got", "spent", "sent", "understood")
+
+
+def _tense(bullet: str) -> str | None:
+    """'past' / 'present' from a bullet's first verb; None when it doesn't start with a verb we can tell."""
+    first = (re.findall(r"[A-Za-z]+", bullet) or [""])[0].lower()
+    if not first:
+        return None
+    if first.endswith("ed") or first in _PAST_IRREGULAR:
+        return "past"
+    if first in ("build", "lead", "write", "run", "make", "drive", "grow", "deliver", "develop", "design",
+                 "manage", "use", "integrate", "create", "maintain", "own", "implement", "handle", "review",
+                 "keep", "support", "work", "ship", "deploy", "mentor", "automate", "optimize", "optimise",
+                 "provide", "prepare", "reconcile", "resolve", "coordinate", "plan", "test", "analyze", "analyse"):
+        return "present"
+    return None
+
+
 def language_issues(resume: dict) -> list[Issue]:
     issues = []
     texts = [resume["summary"]] + [b for j in resume["experience"] for b in j["bullets"]] + \
@@ -88,6 +108,19 @@ def language_issues(resume: dict) -> list[Issue]:
                 issues.append(Issue(WARNING, "Language", f"Repeated word \"{m.group(0)}\" in: \"{t[:70]}…\""))
         if t and t[0].islower():
             issues.append(Issue(WARNING, "Language", f"Starts with a lowercase letter: \"{t[:70]}…\""))
+    for job in resume["experience"]:  # past roles in the past tense; never mixed within a role
+        name = job["company"] or job["title"] or "a role"
+        tenses = {_tense(b) for b in job["bullets"] if _tense(b)}
+        current = bool(review.PRESENT.search(job["dates"]))
+        if len(tenses) > 1:
+            issues.append(Issue(WARNING, "Language", f"{name}: bullets mix past and present tense; use "
+                                                     f"{'present' if current else 'past'} tense throughout."))
+        elif tenses == {"present"} and not current:
+            issues.append(Issue(WARNING, "Language", f"{name} is a past role, but its bullets are in the present "
+                                                     "tense."))
+        for b in job["bullets"]:
+            if _tense(b) == "present" and re.search(r",? and (?:" + "|".join(_PAST_IRREGULAR) + r"|\w+ed)\b", b):
+                issues.append(Issue(WARNING, "Language", f"Mixed tense in one bullet: \"{b[:70]}…\""))
     bullets = [b.strip() for j in resume["experience"] for b in j["bullets"] if b.strip()]
     if bullets:
         with_dot = sum(b.endswith(".") for b in bullets)

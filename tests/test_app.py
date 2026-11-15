@@ -159,6 +159,17 @@ class TestAppFlow(AppCase):
         self.button(at, "👔 Review as a recruiter").click().run()
         self.assertIn("recruiter", CALLS)
         self.assertIn("Clear accountant profile", self.text(at))
+        count = len(at.session_state["versions"])
+        self.button(at, "🛠️ Apply these improvements").click().run()
+        self.assertEqual(len(at.session_state["versions"]), count + 1)
+        self.assertIn(f"Recruiter improvements: version {count + 1} is ready", self.text(at))
+        self.assertIn("What changed", self.text(at))
+        self.assertTrue(at.session_state["versions"][-1]["note"].startswith("Recruiter improvements"))
+
+        # Resume tips: one click, and the user is told the new version is ready
+        self.button(at, "✨ Apply the resume tips").click().run()
+        self.assertIn(f"Resume tips: version {count + 2} is ready", self.text(at))
+        self.assertIn("Past roles in the past tense", SENT["revision"])
 
         # Save application, then find it under My applications and reopen it
         at.text_input(key="app_company").input("Acme Ltd")

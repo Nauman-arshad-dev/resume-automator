@@ -124,10 +124,21 @@ JOB_FAMILIES = {
 }
 
 
+# Job titles ("Full Stack Software Engineer") and work models ("remote") are never skills either
+JOB_TITLE = re.compile(r"\b(developer|engineer|architect|manager|specialist|analyst|consultant|designer|intern|"
+                       r"administrator|scientist|officer|lead|director|technician|accountant|associate)s?$", re.I)
+# "AI labs", "fast-growing companies", "real projects": who or what the company works with
+WHO_OR_WHERE = re.compile(r"\b(compan(?:y|ies)|labs?|projects|clients|customers|teams|startups|people|engineers|"
+                          r"candidates|opportunit(?:y|ies))$", re.I)
+WORK_MODELS = {"remote", "hybrid", "on-site", "onsite", "on site", "full-time", "full time", "part-time",
+               "part time", "contract", "freelance", "permanent", "relocation", "remote work"}
+
+
 def is_skill(term: str) -> bool:
-    """False for a job ad's work areas, departments, job families and hiring steps."""
+    """False for a job ad's work areas, departments, job families, job titles, work models and hiring steps."""
     t = term.strip().lower()
-    return bool(t) and t not in JOB_FAMILIES and not NOT_A_SKILL.search(t)
+    return bool(t) and t not in JOB_FAMILIES and t not in WORK_MODELS and not NOT_A_SKILL.search(t) \
+        and not JOB_TITLE.search(t) and not WHO_OR_WHERE.search(t)
 
 
 def split_requirements(analysis: dict) -> dict:
