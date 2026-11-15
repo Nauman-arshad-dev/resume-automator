@@ -249,10 +249,16 @@ class TestAcceptance(AppCase):
         for name in ("master_resume.txt", "skill_confirmations.json", "profile_answers.json"):
             self.assertTrue(Path(self.data, name).is_file(), f"New job keeps {name}")
         self.assertFalse(at.text_area(key="job_text").value)
+        self.button(at, "📌 Pin my current profile as the master").click().run()
         self.button(at, "Yes, reset everything").click().run()
         for name in ("master_resume.txt", "skill_confirmations.json", "profile_answers.json", "workspace.json"):
             self.assertFalse(Path(self.data, name).exists(), f"Reset removes {name}")
         self.assertFalse(store.profile_history(self.data))
+        # The pinned master survives Reset and comes back in one click
+        self.assertEqual(store.load_pinned(self.data)[0].strip(), master_text(SC).strip())
+        self.button(at, "📌 Use my pinned master profile").click().run()
+        self.assertEqual(Path(self.data, "master_resume.txt").read_text(encoding="utf-8").strip(),
+                         master_text(SC).strip())
         self.assertFalse(at.exception, at.exception)
 
     def test_profile_fixes_old_location_line_and_missing_link(self):

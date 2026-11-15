@@ -667,7 +667,8 @@ new_col.button("🆕 New job", on_click=new_job, width="stretch",
                help="Start the next application. Keeps your profile, your saved answers and your skill answers.")
 with reset_col.popover("♻️ Reset", width="stretch"):
     st.markdown("Forget **everything**: your profile and its history, your saved answers, your skill answers, the "
-                "job and its results. Saved applications are kept (delete them under 💼 My applications).")
+                "job and its results. Saved applications and your 📌 **pinned master** are kept: one click brings "
+                "the master back.")
     st.button("Yes, reset everything", on_click=reset_everything, type="primary")
 st.caption("Paste a job and click **Create**. Your resume is written only from your profile and your own answers, "
            "then checked line by line before you can download it.")
@@ -840,8 +841,33 @@ with step(1, "Your profile", "Entered once and saved on this laptop. Every resum
                 st.session_state["notice_top"] = f"Added {new_link} to your profile's contact line."
                 st.rerun()
         with st.expander("✏️ Manage your profile: edit it, your saved answers, add files, history"):
-            t_edit, t_answers, t_files, t_history = st.tabs(["Edit", f"Saved answers ({len(saved_profile_answers)})",
-                                                             "🪄 Add from files", "History"])
+            t_master, t_edit, t_answers, t_files, t_history = st.tabs(
+                ["📌 Master copy", "Edit", f"Saved answers ({len(saved_profile_answers)})", "🪄 Add from files",
+                 "History"])
+            with t_master:
+                pinned_text, pinned_on = store.load_pinned(DATA_DIR)
+                if pinned_text:
+                    same = pinned_text.strip() == saved_master.strip()
+                    st.caption(f"Your pinned master, saved {pinned_on}. Reset never deletes it. Copy it with the 📋 "
+                               "button (top-right of the box)."
+                               + ("" if same else " ⚠️ Your current profile differs from it."))
+                    st.code(pinned_text, language=None, height=320)
+                    pin_col, use_col, dl_col = st.columns(3)
+                    if not same and use_col.button("↩️ Use the pinned master", width="stretch"):
+                        save_master(pinned_text)
+                        st.session_state["notice_top"] = "Your pinned master is your profile again."
+                        st.rerun()
+                    dl_col.download_button("⬇️ Download as .txt", pinned_text, "master-profile.txt",
+                                           mime="text/plain", width="stretch")
+                else:
+                    st.caption("Pin your profile once it's right. The pinned master is kept even by Reset, and you "
+                               "can copy it from here any time.")
+                    pin_col = st.container()
+                    same = False
+                if not same and pin_col.button("📌 Pin my current profile as the master", width="stretch"):
+                    store.save_pinned(DATA_DIR, saved_master)
+                    st.session_state["notice_top"] = "Pinned. This master is kept even if you reset the app."
+                    st.rerun()
             with t_edit:
                 edited_master = st.text_area("Profile text", saved_master, height=260,
                                              key=f"profile_{hash(saved_master)}",
@@ -884,6 +910,14 @@ with step(1, "Your profile", "Entered once and saved on this laptop. Every resum
                         st.rerun()
         master = saved_master
     else:
+        pinned_text, pinned_on = store.load_pinned(DATA_DIR)
+        if pinned_text and remember:
+            if st.button(f"📌 Use my pinned master profile (saved {pinned_on})", type="primary", width="stretch"):
+                save_master(pinned_text)
+                st.session_state["replace_master"] = False
+                st.session_state["notice_top"] = "Your pinned master profile is back."
+                st.rerun()
+            st.caption("…or upload / paste a different one:")
         uploaded = st.file_uploader("Upload your resume (add your LinkedIn PDF or older resumes too)",
                                     type=UPLOAD_TYPES, accept_multiple_files=True,
                                     key=f"upload_master_{upload_round()}",

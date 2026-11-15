@@ -14,6 +14,7 @@ Runs locally on your laptop. **No API key needed:** it uses your existing Claude
 - 📄 Import your resume from **PDF, Word, JSON, Markdown or text** (several files at once, e.g. your resume plus your LinkedIn PDF). It is **saved straight away** and becomes your master profile, the source of truth for every resume.
 - 🪄 **Build up your profile automatically**: Claude merges your resume, LinkedIn export, older resumes and notes into one organised profile. It keeps every real fact and number, invents nothing, and asks what's missing (e.g. user counts, which CI/CD tool). Numbers it added or dropped are flagged, and nothing is saved until you review it.
 - ✏️ Edit it any time, or **➕ add** a new role, project, certification or achievement under its section without retyping anything. Every change keeps the previous version in a **history** you can restore.
+- 📌 **Pinned master**: pin your finished profile once. It is shown in a copy-ready box (Step 1 → Manage your profile → 📌 Master copy), can be downloaded as .txt, and **Reset never deletes it**: one click brings it back.
 - A job-specific resume **never changes your profile**.
 
 **Job analysis for any profession**

@@ -6,6 +6,7 @@ Local storage for job applications and master-profile history (all git-ignored, 
     data/profile_history/<timestamp>.txt      earlier versions of the master profile (last 20)
     data/workspace.json                        the job in progress, restored after a browser refresh
     data/profile_answers.json                  your answers about your own experience (override the profile)
+    data/master_pinned.txt                     the pinned master profile (Reset keeps it)
 
 A saved application never changes the master profile, and saving the profile never
 changes an application: each application keeps its own copy of what was used.
@@ -224,3 +225,25 @@ def add_answers(base: Path, new: list[tuple[str, str]]) -> list[dict]:
 
 def clear_answers(base: Path) -> None:
     (Path(base) / ANSWERS).unlink(missing_ok=True)
+
+
+# --------------------------------------------------------------------------- #
+# Pinned master: the long-term copy of the profile; Reset never deletes it
+# --------------------------------------------------------------------------- #
+
+PINNED = "master_pinned.txt"
+
+
+def save_pinned(base: Path, text: str) -> None:
+    path = Path(base) / PINNED
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text.strip() + "\n", encoding="utf-8")
+
+
+def load_pinned(base: Path) -> tuple[str, str]:
+    """(text, "YYYY-MM-DD HH:MM" it was pinned) or ("", "")."""
+    path = Path(base) / PINNED
+    try:
+        return path.read_text(encoding="utf-8"), datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        return "", ""
